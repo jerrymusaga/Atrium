@@ -1,0 +1,121 @@
+-- Atrium.DealRoom
+--
+-- The diligence + offer half of Atrium. The DESIGN (see docs/ASSESSMENT.md §4):
+--   * Document  — signatory Seller only. Stable, private. Holds the hash + the pointer
+--                 into the OFF-CHAIN encrypted blob store. Never carries buyer observers.
+--   * AccessGrant — one per buyer per tier. Visible only to Seller + that Buyer.
+--   * AccessEvent — append-only, immutable "who saw what, when". The differentiator.
+--   * Offer — buyer's bid, visible only to Seller. Accepting it triggers the executor
+--             app to build the AllocationRequest and settle via Atrium.Dvp.
+--
+-- Documents live encrypted off-chain; Canton is the authorization + audit layer, not the
+-- vault. Byte-confidentiality rests on key management (out of MVP scope).
+
+module Atrium.DealRoom where
+
+import Daml.Script
+import DA.Time (hours, addRelTime)
+
+template Deal
+  with
+    seller : Party
+    dealId : Text
+    title : Text
+    instrument : Text     -- the asset being sold, e.g. "HALDEN-EQUITY"
+    quantity : Decimal     -- units of the stake on offer
+  where
+    signatory seller
+
+template Document
+  with
+    seller : Party
+    dealId : Text
+    docId : Text
+    title : Text
+    tier : Int            -- 1 = teaser tier, 2 = deep diligence tier
+    contentHash : Text     -- sha256 of the ciphertext
+    blobPointer : Text     -- pointer into the off-chain encrypted store
+  where
+    signatory seller
+
+template AccessGrant
+  with
+    seller : Party
+    buyer : Party
+    dealId : Text
+    maxTier : Int          -- buyer may access documents up to this tier
+    grantedAt : Time
+  where
+    signatory seller
+    observer buyer
+
+    -- Buyer-initiated, seller-signed: unforgeable, ledger-timestamped access record.
+    nonconsuming choice RecordAccess : ContractId AccessEvent
+      with docId : Text
+      controller buyer
+      do
+        now <- getTime
+        create AccessEvent with seller, buyer, dealId, docId, accessedAt = now
+
+    choice Revoke : ()
+      controller seller
+      do pure ()
+
+template AccessEvent
+  with
+    seller : Party
+    buyer : Party
+    dealId : Text
+    docId : Text
+    accessedAt : Time
+  where
+    signatory seller
+    observer buyer
+    -- Production: add an optional Regulator observer for supervisory visibility.
+
+template Offer
+  with
+    buyer : Party
+    seller : Party
+    dealId : Text
+    pricePerUnit : Decimal
+    quantity : Decimal
+    submittedAt : Time
+  where
+    signatory buyer
+    observer seller    -- visible to seller only; rival buyers never see it
+
+    -- Accepting marks the winning offer. The close itself (payment vs ownership,
+    -- atomic) is orchestrated by the executor app against Atrium.Dvp, fetching
+    -- choice contexts from the token registries. Kept as the trigger point here.
+    choice Accept : ()
+      controller seller
+      do pure ()
+
+    choice WithdrawOffer : ()
+      controller buyer
+      do pure ()
+
+-- Seeds a demo deal: 2 documents across 2 tiers, two buyers on different tiers,
+-- a couple of recorded accesses, and one offer. Useful for local exploration.
+setupDemo : Script ()
+setupDemo = script do
+  seller <- allocateParty "Halden"      -- the seller (Halden Robotics)
+  buyerA <- allocateParty "Boranic"     -- strategic acquirer, tier 1 only
+  buyerB <- allocateParty "Meridian"    -- friendly fund, tier 1 + 2
+  now <- getTime
+  let dealId = "HALDEN-2026-A"
+
+  _ <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Robotics — 12% secondary", instrument = "HALDEN-EQUITY", quantity = 120000.0)
+  _ <- submit seller do createCmd (Document with seller, dealId, docId = "teaser",     title = "Investment teaser",    tier = 1, contentHash = "sha256:aa11", blobPointer = "s3://atrium/halden/teaser.enc")
+  _ <- submit seller do createCmd (Document with seller, dealId, docId = "financials", title = "Audited financials", tier = 2, contentHash = "sha256:bb22", blobPointer = "s3://atrium/halden/financials.enc")
+
+  grantA <- submit seller do createCmd (AccessGrant with seller, buyer = buyerA, dealId, maxTier = 1, grantedAt = now)
+  grantB <- submit seller do createCmd (AccessGrant with seller, buyer = buyerB, dealId, maxTier = 2, grantedAt = now)
+
+  _ <- submit buyerA do exerciseCmd grantA (RecordAccess with docId = "teaser")
+  _ <- submit buyerB do exerciseCmd grantB (RecordAccess with docId = "teaser")
+  _ <- submit buyerB do exerciseCmd grantB (RecordAccess with docId = "financials")
+
+  _ <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = addRelTime now (hours 1))
+  pure ()

@@ -1,0 +1,156 @@
+-- Atrium.Dvp
+--
+-- The atomic Delivery-vs-Payment close, as MOCK templates that mirror the shape of
+-- the Splice Token Standard (CIP-56). Self-contained so it builds and runs in Daml
+-- Script without the real token-standard packages. Stage 3 swaps these for the real
+-- interfaces and fetches choice contexts from the token registries (see docs/ASSESSMENT.md §4).
+--
+--   Holding            -> Splice.Api.Token.HoldingV1.Holding
+--   AllocationFactory  -> Splice.Api.Token.AllocationInstructionV1.AllocationFactory
+--   Allocation         -> Splice.Api.Token.AllocationV1.Allocation
+--   SettlementCoordinator.Settle -> executor app driving AllocationRequest + Allocation_ExecuteTransfer
+
+module Atrium.Dvp where
+
+import Daml.Script
+import DA.Assert ((===))
+import DA.Time (addRelTime, hours)
+
+template Holding
+  with
+    admin : Party       -- token registry / instrument admin
+    owner : Party
+    instrument : Text    -- e.g. "USD-CASH", "HALDEN-EQUITY"
+    amount : Decimal
+  where
+    signatory admin
+    observer owner
+
+template Allocation
+  with
+    admin : Party
+    sender : Party
+    receiver : Party
+    executor : Party
+    instrument : Text
+    amount : Decimal
+    settlementRef : Text
+    legId : Text
+  where
+    signatory admin, sender
+    observer receiver, executor
+
+    choice Allocation_ExecuteTransfer : ContractId Holding
+      controller executor
+      do create Holding with admin, owner = receiver, instrument, amount
+
+    choice Allocation_Withdraw : ContractId Holding
+      controller sender
+      do create Holding with admin, owner = sender, instrument, amount
+
+    choice Allocation_Cancel : ContractId Holding
+      controller executor
+      do create Holding with admin, owner = sender, instrument, amount
+
+template AllocationFactory
+  with
+    admin : Party
+    users : [Party]   -- stands in for registry disclosure so senders can exercise locally
+  where
+    signatory admin
+    observer users
+
+    nonconsuming choice Allocate : ContractId Allocation
+      with
+        holdingCid : ContractId Holding
+        settlementRef : Text
+        legId : Text
+        sender : Party
+        receiver : Party
+        executor : Party
+      controller sender
+      do
+        h <- fetch holdingCid
+        assertMsg "sender must own the holding" (h.owner == sender)
+        assertMsg "registry must match" (h.admin == admin)
+        archive holdingCid
+        create Allocation with
+          admin, sender, receiver, executor
+          instrument = h.instrument, amount = h.amount, settlementRef, legId
+
+template SettlementCoordinator
+  with
+    executor : Party
+    settlementRef : Text
+    settleBefore : Time
+  where
+    signatory executor
+
+    -- Both legs execute inside ONE choice => one transaction => atomic.
+    choice Settle : (ContractId Holding, ContractId Holding)
+      with
+        cashLeg : ContractId Allocation
+        ownershipLeg : ContractId Allocation
+      controller executor
+      do
+        now <- getTime
+        assertMsg "settle deadline passed" (now <= settleBefore)
+        cashOut <- exercise cashLeg Allocation_ExecuteTransfer
+        ownershipOut <- exercise ownershipLeg Allocation_ExecuteTransfer
+        pure (cashOut, ownershipOut)
+
+-- Proof 1: happy path — one transaction swaps both legs.
+testAtomicDvP : Script ()
+testAtomicDvP = script do
+  registry <- allocateParty "Registry"
+  buyer    <- allocateParty "Buyer"
+  seller   <- allocateParty "Seller"
+  operator <- allocateParty "AtriumApp"
+  now <- getTime
+  let ref = "DEAL-001"
+
+  buyerCash    <- submit registry do createCmd (Holding with admin = registry, owner = buyer,  instrument = "USD-CASH",       amount = 4200000.0)
+  sellerEquity <- submit registry do createCmd (Holding with admin = registry, owner = seller, instrument = "HALDEN-EQUITY", amount = 120000.0)
+  factory <- submit registry do createCmd (AllocationFactory with admin = registry, users = [buyer, seller])
+  coord   <- submit operator do createCmd (SettlementCoordinator with executor = operator, settlementRef = ref, settleBefore = addRelTime now (hours 24))
+
+  cashAlloc      <- submit buyer  do exerciseCmd factory (Allocate with holdingCid = buyerCash,    settlementRef = ref, legId = "cash",      sender = buyer,  receiver = seller, executor = operator)
+  ownershipAlloc <- submit seller do exerciseCmd factory (Allocate with holdingCid = sellerEquity, settlementRef = ref, legId = "ownership", sender = seller, receiver = buyer,  executor = operator)
+
+  (sellerCashCid, buyerEquityCid) <- submit operator do exerciseCmd coord (Settle with cashLeg = cashAlloc, ownershipLeg = ownershipAlloc)
+
+  Some sellerCash <- queryContractId seller sellerCashCid
+  sellerCash.owner === seller
+  sellerCash.amount === 4200000.0
+  Some buyerEquity <- queryContractId buyer buyerEquityCid
+  buyerEquity.owner === buyer
+  buyerEquity.amount === 120000.0
+  pure ()
+
+-- Proof 2: atomicity holds — if one leg is gone, settlement fails and nothing moves.
+testAtomicityHolds : Script ()
+testAtomicityHolds = script do
+  registry <- allocateParty "Registry"
+  buyer    <- allocateParty "Buyer"
+  seller   <- allocateParty "Seller"
+  operator <- allocateParty "AtriumApp"
+  now <- getTime
+  let ref = "DEAL-002"
+
+  buyerCash    <- submit registry do createCmd (Holding with admin = registry, owner = buyer,  instrument = "USD-CASH",       amount = 4200000.0)
+  sellerEquity <- submit registry do createCmd (Holding with admin = registry, owner = seller, instrument = "HALDEN-EQUITY", amount = 120000.0)
+  factory <- submit registry do createCmd (AllocationFactory with admin = registry, users = [buyer, seller])
+  coord   <- submit operator do createCmd (SettlementCoordinator with executor = operator, settlementRef = ref, settleBefore = addRelTime now (hours 24))
+
+  cashAlloc      <- submit buyer  do exerciseCmd factory (Allocate with holdingCid = buyerCash,    settlementRef = ref, legId = "cash",      sender = buyer,  receiver = seller, executor = operator)
+  ownershipAlloc <- submit seller do exerciseCmd factory (Allocate with holdingCid = sellerEquity, settlementRef = ref, legId = "ownership", sender = seller, receiver = buyer,  executor = operator)
+
+  _ <- submit seller do exerciseCmd ownershipAlloc Allocation_Withdraw  -- seller pulls their leg
+
+  submitMustFail operator do exerciseCmd coord (Settle with cashLeg = cashAlloc, ownershipLeg = ownershipAlloc)
+
+  Some _ <- queryContractId operator cashAlloc   -- cash still locked
+  sellerHoldings <- query @Holding seller
+  let cashToSeller = [ h | (_, h) <- sellerHoldings, h.instrument == "USD-CASH" ]
+  assertMsg "no cash should have reached the seller" (null cashToSeller)
+  pure ()
