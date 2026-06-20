@@ -4,3 +4,9 @@ dist/
 *.dar
 .env
 .DS_Store
+
+# generated build artifacts
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+ledger/log/

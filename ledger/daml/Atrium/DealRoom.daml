@@ -15,6 +15,8 @@ module Atrium.DealRoom where
 
 import Daml.Script
 import DA.Time (hours, addRelTime)
+import DA.Assert ((===))
+import DA.Optional (isSome)
 
 template Deal
   with
@@ -118,4 +120,47 @@ setupDemo = script do
   _ <- submit buyerB do exerciseCmd grantB (RecordAccess with docId = "financials")
 
   _ <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = addRelTime now (hours 1))
+  pure ()
+
+-- Proof: the privacy half. The differentiator is that the SAME deal projects
+-- differently per party — rivals are invisible, and every disclosure is scoped.
+-- Where Dvp.daml proves the atomic close, this proves selective disclosure: the
+-- claim in docs (each buyer sees only their tier; rivals never see each other)
+-- becomes a ledger-verified assertion rather than prose.
+testPrivacyProjection : Script ()
+testPrivacyProjection = script do
+  seller <- allocateParty "Halden"
+  buyerA <- allocateParty "Boranic"    -- strategic acquirer, tier 1
+  buyerB <- allocateParty "Meridian"   -- friendly fund, tier 2
+  now <- getTime
+  let dealId = "HALDEN-2026-A"
+
+  grantA <- submit seller do createCmd (AccessGrant with seller, buyer = buyerA, dealId, maxTier = 1, grantedAt = now)
+  grantB <- submit seller do createCmd (AccessGrant with seller, buyer = buyerB, dealId, maxTier = 2, grantedAt = now)
+
+  -- buyerB bids. Offer is observed by the seller only.
+  offerCid <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = now)
+
+  -- 1. Rivals are invisible: buyerA cannot see buyerB's bid; the seller can.
+  offerForA <- queryContractId buyerA offerCid
+  offerForA === None
+  offerForSeller <- queryContractId seller offerCid
+  assertMsg "seller must see the offer" (isSome offerForSeller)
+
+  -- 2. Grants are scoped per buyer: neither buyer sees the other's grant.
+  gB_forA <- queryContractId buyerA grantB
+  gB_forA === None
+  gA_forB <- queryContractId buyerB grantA
+  gA_forB === None
+
+  -- 3. The access trail is scoped: buyerB's recorded access is visible to
+  --    buyerB and the seller, never to the rival buyerA.
+  evCid <- submit buyerB do exerciseCmd grantB (RecordAccess with docId = "financials")
+  evForA <- queryContractId buyerA evCid
+  evForA === None
+  evForB <- queryContractId buyerB evCid
+  assertMsg "buyer must see their own access event" (isSome evForB)
+  evForSeller <- queryContractId seller evCid
+  assertMsg "seller must see the access event" (isSome evForSeller)
+
   pure ()
