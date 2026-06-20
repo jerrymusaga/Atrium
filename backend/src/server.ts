@@ -10,7 +10,7 @@
 
 import express from 'express'
 import {
-  activeContracts, create, entityOf, exercise, listParties, resolveParty, type CreatedEvent,
+  activeContracts, allocatePartyByHint, create, entityOf, exercise, listParties, resolveParty, type CreatedEvent,
 } from './ledgerApi.js'
 
 const app = express()
@@ -168,13 +168,7 @@ async function ensureParty(prefix: string): Promise<string> {
   const all = await listParties()
   const hit = all.find((p) => p.startsWith(prefix + '-') || p.startsWith(prefix + '::') || p === prefix)
   if (hit) return hit
-  const res = await fetch(`${process.env.LEDGER_API_URL ?? 'http://localhost:7575'}/v2/parties`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(process.env.LEDGER_TOKEN ? { Authorization: `Bearer ${process.env.LEDGER_TOKEN}` } : {}) },
-    body: JSON.stringify({ partyIdHint: prefix, identityProviderId: '' }),
-  })
-  const j: any = await res.json()
-  return j.partyDetails?.party ?? (await resolveParty(prefix))
+  return allocatePartyByHint(prefix)
 }
 
 // Lenses are discovered from the ledger: the seller + every buyer that holds an AccessGrant

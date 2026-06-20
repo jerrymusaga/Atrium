@@ -98,4 +98,14 @@ does, so Stage 3 is endpoint + JWT + the Amulet cash-leg swap (`LEDGER_API_URL` 
 are plumbed through `backend/src/ledgerApi.ts`). Until a ≥16 GB host is available, **Stage 2.5 (real Canton
 ledger via `daml sandbox`) is the standing proof.** cn-quickstart is cloned at `~/cn-quickstart`.
 
+### Better path than local LocalNet: Seaport (hosted validators) — see `docs/SEAPORT.md`
+[Seaport](https://app.devnet.seaport.to) hosts Canton validators that expose the **same JSON Ledger API v2**, so
+Atrium runs on a **real hosted network with no local RAM cost**. The executor now supports **OIDC
+client-credentials auth** (Seaport's Loop DevNet wallet issuer) alongside static-token and no-auth — precedence:
+`LEDGER_TOKEN` → OIDC (`OIDC_ISSUER`/`OIDC_TOKEN_URL` + `OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`) → none. Pointing
+Atrium at Seaport is pure config (`.env.example`). Per the Seaport guide the devnet looks like a plain hosted
+Canton ledger (no Amulet faucet noted) → this gives **hosted, multi-validator Stage 2.5** (real separate nodes);
+full Stage 3 still needs a Splice/Amulet-enabled validator. **Blocked on user-supplied details:** validator JSON
+API URL, OIDC creds (or a session JWT), user id — listed in `docs/SEAPORT.md`.
+
 **Gate:** Stage 3 green → proceed; red → fall back to sealed-bid issuance (same close, one privacy surface).
