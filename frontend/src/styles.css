@@ -150,8 +150,44 @@ body {
 .leg-inst { font-size: 11px; color: var(--steel); margin: 4px 0 8px; }
 .leg-owner { font-size: 13px; color: var(--muted); }
 
-.settled-banner { color: var(--settled); font-size: 13px; line-height: 1.5; }
+.settled-banner { color: var(--settled); font-size: 13px; line-height: 1.6; }
+.settled-banner strong { color: #6fd0b3; }
 .muted-note { color: var(--muted); font-size: 13px; }
+
+/* the atomic swap: legs pulse together while both legs settle in one transaction */
+.legs { position: relative; }
+.leg { transition: border-color .3s, transform .5s, box-shadow .3s; }
+.close.is-settling .leg { border-color: var(--seal); box-shadow: 0 0 0 1px var(--seal) inset; animation: legpulse .9s ease; }
+.leg.leg-swapped { border-color: var(--settled); }
+.leg-arrow { color: var(--settled); }
+@keyframes legpulse { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+.swap-pulse {
+  position: absolute; inset: 0; border-radius: 10px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(198,138,62,.18), transparent);
+  background-size: 200% 100%; animation: sweep .9s linear;
+}
+@keyframes sweep { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* all-or-nothing: the close snaps back, nothing moved */
+.close.is-rollback .leg { animation: snapback .5s ease; border-color: #c0563a; }
+@keyframes snapback { 0% { transform: translateX(0); } 25% { transform: translateX(-5px); } 50% { transform: translateX(5px); } 75% { transform: translateX(-3px); } 100% { transform: translateX(0); } }
+.btn.stress { margin-top: 8px; color: var(--muted); border-style: dashed; }
+.btn.stress:hover { color: var(--text); border-color: var(--seal); }
+.rollback-banner {
+  margin-top: 14px; padding: 13px 15px; border: 1px solid #6e3324; border-radius: 10px;
+  background: #241310; color: #e3a892; font-size: 13px; line-height: 1.6;
+}
+.rollback-banner .rb-mark { display: block; color: #e07a55; letter-spacing: 1.5px; font-size: 11px; margin-bottom: 4px; }
+.rollback-banner em { color: var(--muted); font-style: normal; }
+
+/* regulator attestation */
+.attest { margin-top: 6px; }
+.attest-card { margin-top: 12px; padding: 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--raised); font-size: 13px; line-height: 1.6; }
+.attest-card.ok { border-color: var(--settled); }
+.attest-line .mono { color: var(--settled); margin-right: 8px; letter-spacing: 1px; }
+.attest-card.pending .attest-line .mono { color: var(--seal); }
+.attest-sub { color: var(--muted); margin-top: 6px; }
+.attest-sub strong { color: var(--text); }
 
 /* ---- Buttons ---- */
 .btn { font-family: var(--body); font-size: 13px; border-radius: 9px; padding: 9px 15px; cursor: pointer; border: 1px solid var(--steel-dim); background: transparent; color: var(--text); transition: background .15s, border-color .15s; }
@@ -161,6 +197,13 @@ body {
 .btn.solid:hover { background: #6fa0c6; }
 .btn.solid:disabled { opacity: .6; cursor: progress; }
 .btn.wide { width: 100%; padding: 13px; }
+
+/* ---- Verified footer ---- */
+.verified { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.mode-pill { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 4px 10px; white-space: nowrap; }
+.mode-pill.live { color: var(--settled); border-color: var(--steel-dim); }
+.verified-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.verified-note code { font-family: var(--mono); font-size: 11px; color: var(--steel); background: var(--raised); padding: 1px 5px; border-radius: 4px; margin: 0 1px; }
 
 /* ---- Toast ---- */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--seal); color: #1a1206; padding: 11px 18px; border-radius: 10px; font-size: 13px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.4); }

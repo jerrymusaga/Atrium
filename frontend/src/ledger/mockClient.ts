@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, Deal, DealView, Document, Holding, Offer, Viewer } from '../types'
+import type { AccessEvent, CloseAttestation, Deal, DealView, Document, Holding, Offer, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -49,18 +49,24 @@ let offers: Offer[] = [
 ]
 
 let settled = false
-let acceptedBuyer: PartyId | null = null
+let acceptedOffer: Offer | null = null
+
+const CASH = 4200000
+const EQUITY = 120000
 
 function holdings(): Holding[] {
+  // Buyer of record is whoever the seller accepted (defaults to Meridian for the seed view).
+  const buyer = acceptedOffer?.buyer ?? BUYER_B
+  const buyerLabel = buyer === BUYER_A ? 'Boranic' : 'Meridian'
   if (!settled) {
     return [
-      { owner: BUYER_B, ownerLabel: 'Meridian', instrument: 'USD-CASH', amount: 4200000 },
-      { owner: SELLER, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: 120000 },
+      { owner: buyer, ownerLabel: buyerLabel, instrument: 'USD-CASH', amount: CASH },
+      { owner: SELLER, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: EQUITY },
     ]
   }
   return [
-    { owner: SELLER, ownerLabel: 'Halden', instrument: 'USD-CASH', amount: 4200000 },
-    { owner: BUYER_B, ownerLabel: 'Meridian', instrument: 'HALDEN-EQUITY', amount: 120000 },
+    { owner: SELLER, ownerLabel: 'Halden', instrument: 'USD-CASH', amount: CASH },
+    { owner: buyer, ownerLabel: buyerLabel, instrument: 'HALDEN-EQUITY', amount: EQUITY },
   ]
 }
 
@@ -115,12 +121,37 @@ export const mockClient: LedgerClient = {
     await wait(120)
     if (viewer !== SELLER) throw new Error('Only the seller can accept an offer')
     offers = offers.map((o) => (o.offerId === offerId ? { ...o, status: 'accepted' } : o))
-    acceptedBuyer = offers.find((o) => o.offerId === offerId)?.buyer ?? null
+    acceptedOffer = offers.find((o) => o.offerId === offerId) ?? null
   },
 
   async settle() {
-    await wait(700) // the atomic swap
-    if (!acceptedBuyer) throw new Error('Accept the winning offer before settling')
+    await wait(900) // the atomic swap
+    if (!acceptedOffer) throw new Error('Accept the winning offer before settling')
     settled = true
+  },
+
+  // Mirrors the Daml proof `testAtomicityHolds`: the executor tries to settle, but one
+  // allocation leg has been pulled. The whole transaction rolls back — no partial close
+  // is representable. State is left exactly as it was.
+  async attemptBrokenClose(viewer: PartyId) {
+    if (viewer !== SELLER) throw new Error('Only the seller drives settlement')
+    if (settled) throw new Error('Already settled')
+    await wait(900)
+    throw new Error('One leg was pulled mid-close → settlement reverted → neither side moved.')
+  },
+
+  async attestClose(): Promise<CloseAttestation> {
+    await wait(200)
+    const bid = acceptedOffer
+    const expectedCash = bid ? bid.pricePerUnit * bid.quantity : 0
+    return {
+      settled,
+      winningBuyerLabel: bid?.buyerLabel ?? null,
+      bidPricePerUnit: bid?.pricePerUnit ?? 0,
+      bidQuantity: bid?.quantity ?? 0,
+      expectedCash,
+      settledCash: settled ? CASH : 0,
+      matched: settled && expectedCash === CASH,
+    }
   },
 }

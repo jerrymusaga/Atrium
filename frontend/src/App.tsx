@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
-import type { DealView } from './types'
+import { httpClient } from './ledger/httpClient'
+import type { CloseAttestation, DealView } from './types'
 
-const client = mockClient
+// VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
+const LIVE = import.meta.env.VITE_LIVE === '1'
+const client = LIVE ? httpClient : mockClient
 
 function money(n: number) {
   return n >= 1000 ? `$${(n).toLocaleString()}` : `$${n}`
@@ -15,6 +18,8 @@ export default function App() {
   const [opened, setOpened] = useState<Record<string, boolean>>({})
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [rollback, setRollback] = useState<string | null>(null)
+  const [attestation, setAttestation] = useState<CloseAttestation | null>(null)
 
   async function load() {
     setView(await client.getDealView(viewer))
@@ -44,6 +49,7 @@ export default function App() {
   async function settle() {
     setSettling(true)
     setMsg(null)
+    setRollback(null)
     try {
       await client.settle(viewer)
       await load()
@@ -52,6 +58,25 @@ export default function App() {
     } finally {
       setSettling(false)
     }
+  }
+
+  // Pull a leg mid-close: proves the swap is all-or-nothing (mirrors testAtomicityHolds).
+  async function stressClose() {
+    setSettling(true)
+    setRollback(null)
+    setMsg(null)
+    try {
+      await client.attemptBrokenClose(viewer)
+    } catch (e) {
+      setRollback((e as Error).message)
+      await load() // re-read: every balance is exactly as before
+    } finally {
+      setSettling(false)
+    }
+  }
+
+  async function verifyClose() {
+    setAttestation(await client.attestClose(viewer))
   }
 
   return (
@@ -187,31 +212,80 @@ export default function App() {
             {view?.offers.length === 0 && <li className="empty">No offers visible to you.</li>}
           </ul>
 
-          <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''}`}>
+          <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
             <div className="legs">
               {view?.holdings.map((h, i) => (
-                <div key={i} className="leg">
+                <div key={i} className={`leg ${view?.settled ? 'leg-swapped' : ''}`}>
                   <div className="leg-amt mono">{h.instrument === 'USD-CASH' ? money(h.amount) : h.amount.toLocaleString()}</div>
                   <div className="leg-inst mono">{h.instrument}</div>
-                  <div className="leg-owner">{h.ownerLabel}</div>
+                  <div className="leg-owner"><span className="leg-arrow">{view?.settled ? '→ ' : ''}</span>{h.ownerLabel}</div>
                 </div>
               ))}
+              {settling && <div className="swap-pulse" aria-hidden />}
             </div>
+
             {current.role === 'seller' && acceptedOffer && !view?.settled && (
-              <button className="btn solid wide" disabled={settling} onClick={settle}>
-                {settling ? 'Settling…' : 'Settle — payment vs ownership, atomically'}
-              </button>
+              <>
+                <button className="btn solid wide" disabled={settling} onClick={settle}>
+                  {settling ? 'Settling both legs in one transaction…' : 'Settle — payment vs ownership, atomically'}
+                </button>
+                <button className="btn ghost wide stress" disabled={settling} onClick={stressClose}>
+                  Stress-test: pull a leg mid-close →
+                </button>
+              </>
             )}
-            {view?.settled && (
-              <div className="settled-banner">
-                One transaction. Cash and ownership swapped together — or not at all.
+
+            {rollback && (
+              <div className="rollback-banner">
+                <span className="rb-mark mono">⟲ REVERTED</span>
+                {rollback} <em>There is no partial settlement to represent.</em>
               </div>
             )}
-            {current.role !== 'seller' && !view?.settled && (
+
+            {view?.settled && (
+              <div className="settled-banner">
+                <strong>One transaction.</strong> Cash and ownership swapped together — or not at all.
+              </div>
+            )}
+
+            {current.role === 'buyer' && !view?.settled && (
               <div className="muted-note">Only the seller drives settlement.</div>
+            )}
+
+            {current.role === 'regulator' && (
+              <div className="attest">
+                <button className="btn wide" onClick={verifyClose}>
+                  Verify the close matched the recorded bid
+                </button>
+                {attestation && (
+                  <div className={`attest-card ${attestation.matched ? 'ok' : 'pending'}`}>
+                    {attestation.settled ? (
+                      <>
+                        <div className="attest-line">
+                          <span className="mono">{attestation.matched ? '✓ VERIFIED' : '✗ MISMATCH'}</span>
+                          settled cash {money(attestation.settledCash)} {attestation.matched ? '=' : '≠'} winning bid {money(attestation.bidPricePerUnit)} × {attestation.bidQuantity.toLocaleString()}
+                        </div>
+                        <div className="attest-sub">
+                          Attested from the recorded bid and the settlement legs — <strong>without any tier-2 document access</strong>.
+                        </div>
+                      </>
+                    ) : (
+                      <div className="attest-line">Not settled yet — nothing to attest.</div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </section>
+
+        <footer className="verified">
+          <span className={`mode-pill ${LIVE ? 'live' : ''}`}>{LIVE ? '● LIVE on Canton' : '○ in-browser mock'}</span>
+          <span className="verified-note">
+            Privacy &amp; atomicity are proven on the ledger by <code>daml test</code> —
+            <code>testPrivacyProjection</code>, <code>testAtomicDvP</code>, <code>testAtomicityHolds</code>.
+          </span>
+        </footer>
 
         {msg && <div className="toast" onClick={() => setMsg(null)}>{msg}</div>}
       </main>

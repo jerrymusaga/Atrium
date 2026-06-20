@@ -58,3 +58,15 @@ export type DealView = {
   holdings: Holding[] // balances this viewer can see
   settled: boolean
 }
+
+// What a regulator (scoped choice-observer on the close) can attest to: that the
+// settlement moved exactly the winning bid — WITHOUT ever seeing tier-2 contents.
+export type CloseAttestation = {
+  settled: boolean
+  winningBuyerLabel: string | null
+  bidPricePerUnit: number
+  bidQuantity: number
+  expectedCash: number // price × quantity, from the recorded bid
+  settledCash: number // what the cash leg actually moved
+  matched: boolean // settledCash === expectedCash
+}
