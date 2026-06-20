@@ -13,12 +13,14 @@ const BUYER_A = 'Boranic'
 const BUYER_B = 'Meridian'
 const OPERATOR = 'AtriumApp'
 
-const VIEWERS: Viewer[] = [
+let VIEWERS: Viewer[] = [
   { party: SELLER, label: 'Halden (Seller)', role: 'seller' },
   { party: BUYER_A, label: 'Boranic (Buyer · tier 1)', role: 'buyer' },
   { party: BUYER_B, label: 'Meridian (Buyer · tier 1+2)', role: 'buyer' },
   { party: 'Regulator', label: 'Regulator (observer)', role: 'regulator' },
 ]
+
+const tierLabel = (t: number) => (t >= 2 ? 'tier 1+2' : 'tier 1')
 
 const deal: Deal = {
   dealId: 'HALDEN-2026-A',
@@ -73,7 +75,36 @@ function holdings(): Holding[] {
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export const mockClient: LedgerClient = {
-  viewers: () => VIEWERS,
+  async listViewers() {
+    await wait(40)
+    return VIEWERS
+  },
+
+  // Seller onboards a buyer at runtime: register the party (insert before the Regulator)
+  // and issue an access grant at the chosen tier. The new lens appears immediately.
+  async inviteBuyer(viewer: PartyId, buyerName: string, tier: number) {
+    if (viewer !== SELLER) throw new Error('Only the seller can invite buyers')
+    const name = buyerName.trim()
+    if (!name) throw new Error('Give the buyer a name')
+    if (VIEWERS.some((v) => v.party.toLowerCase() === name.toLowerCase())) throw new Error(`${name} is already in the room`)
+    await wait(150)
+    const t = tier >= 2 ? 2 : 1
+    grants[name] = t
+    const reg = VIEWERS.filter((v) => v.role === 'regulator')
+    const rest = VIEWERS.filter((v) => v.role !== 'regulator')
+    VIEWERS = [...rest, { party: name, label: `${name} (Buyer · ${tierLabel(t)})`, role: 'buyer' }, ...reg]
+    return name
+  },
+
+  // Buyer submits a bid for the whole stake on offer. Visible to the seller only.
+  async submitOffer(viewer: PartyId, pricePerUnit: number) {
+    const me = VIEWERS.find((v) => v.party === viewer)
+    if (!me || me.role !== 'buyer') throw new Error('Only a buyer can submit an offer')
+    if (!(pricePerUnit > 0)) throw new Error('Enter a price per unit')
+    await wait(150)
+    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    offers = [...offers, { offerId: `o${offers.length + 1}`, buyer: viewer, buyerLabel: viewer, pricePerUnit, quantity: deal.quantity, submittedAt: stamp, status: 'open' }]
+  },
 
   async getDealView(viewer: PartyId): Promise<DealView> {
     await wait(120)

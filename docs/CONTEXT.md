@@ -74,6 +74,10 @@ Production-VALID patterns + current libraries (the same DvP machinery as Tradewe
   leg" control visualizes all-or-nothing (mirrors `testAtomicityHolds`); the Regulator lens actively attests the
   close matched the recorded bid without tier-2 access; a footer ties the UI claims back to the `daml test` proofs.
   Set `VITE_LIVE=1` to point the UI at the live executor instead of the in-browser mock.
+- **Dynamic onboarding (Canton-native "registration").** The seller can invite a buyer at runtime: the executor
+  onboards a real ledger party (`/v2/parties`) and issues their `AccessGrant` (`/invite`), and the buyer can
+  submit a bid (`/offer`). `/viewers` is discovered from on-ledger grants, so new buyers appear as lenses with
+  the right tier — verified live (e.g. inviting "Castor" tier 2 → scoped view + a bid only the seller sees).
 
 ## How to run
 - **Mock demo (fastest, no ledger):** `make frontend` → http://localhost:5173

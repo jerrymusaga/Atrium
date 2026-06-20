@@ -77,7 +77,25 @@ body {
 .lens-opt.is-active .lens-dot { box-shadow: 0 0 0 3px rgba(94, 143, 181, .2); }
 .lens-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 14px 0 0; }
 
+/* ---- Invite a buyer (seller, in the rail) ---- */
+.invite { border-top: 1px solid var(--line); padding-top: 22px; }
+.invite-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.field {
+  flex: 1; min-width: 0; background: var(--raised); border: 1px solid var(--line);
+  color: var(--text); border-radius: 9px; padding: 10px 12px; font-size: 13px; font-family: var(--body);
+}
+.field:focus { outline: none; border-color: var(--steel); }
+.tier-sel { flex: 0 0 96px; cursor: pointer; }
+.invite .lens-note { margin-top: 10px; }
+
 /* ---- Stage ---- */
+.booting { align-items: center; justify-content: center; color: var(--muted); font-size: 14px; }
+
+/* ---- Buyer bid row ---- */
+.bid-row { display: flex; gap: 8px; margin-bottom: 18px; }
+.bid-row .field { flex: 1; }
+.bid-row .btn { white-space: nowrap; }
+
 .stage { padding: 32px 40px 56px; max-width: 920px; }
 @media (max-width: 880px) { .stage { padding: 24px 20px 48px; } }
 

@@ -21,14 +21,18 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 const post = (path: string, data: unknown) =>
   j(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
 
-let viewerCache: Viewer[] = [
-  { party: 'Halden', label: 'Halden (Seller)', role: 'seller' },
-  { party: 'Boranic', label: 'Boranic (Buyer · tier 1)', role: 'buyer' },
-  { party: 'Meridian', label: 'Meridian (Buyer · tier 1+2)', role: 'buyer' },
-]
-
 export const httpClient: LedgerClient = {
-  viewers: () => viewerCache,
+  async listViewers(): Promise<Viewer[]> {
+    return j<Viewer[]>(`/viewers`)
+  },
+
+  async inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId> {
+    const r = await post(`/deals/${DEAL}/invite`, { party: viewer, buyerName, tier }) as any
+    return r.party as PartyId
+  },
+  async submitOffer(viewer: PartyId, pricePerUnit: number) {
+    await post(`/deals/${DEAL}/offer`, { party: viewer, pricePerUnit })
+  },
 
   async getDealView(viewer: PartyId): Promise<DealView> {
     return j<DealView>(`/deals/${DEAL}/view?party=${encodeURIComponent(viewer)}`)
@@ -50,6 +54,3 @@ export const httpClient: LedgerClient = {
     return { settled: false, winningBuyerLabel: null, bidPricePerUnit: 0, bidQuantity: 0, expectedCash: 0, settledCash: 0, matched: false }
   },
 }
-
-// Best-effort: replace the static viewer list with whatever the executor reports.
-void fetch(`${BASE}/viewers`).then((r) => r.ok && r.json()).then((v) => { if (Array.isArray(v) && v.length) viewerCache = v }).catch(() => {})

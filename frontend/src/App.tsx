@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
-import type { CloseAttestation, DealView } from './types'
+import type { CloseAttestation, DealView, Viewer } from './types'
 
 // VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
 const LIVE = import.meta.env.VITE_LIVE === '1'
@@ -12,24 +12,56 @@ function money(n: number) {
 }
 
 export default function App() {
-  const viewers = client.viewers()
-  const [viewer, setViewer] = useState(viewers[0].party)
+  const [viewers, setViewers] = useState<Viewer[]>([])
+  const [viewer, setViewer] = useState<string>('')
   const [view, setView] = useState<DealView | null>(null)
   const [opened, setOpened] = useState<Record<string, boolean>>({})
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [rollback, setRollback] = useState<string | null>(null)
   const [attestation, setAttestation] = useState<CloseAttestation | null>(null)
+  const [inviteName, setInviteName] = useState('')
+  const [inviteTier, setInviteTier] = useState(1)
+  const [bid, setBid] = useState('')
+
+  async function refreshViewers() {
+    const vs = await client.listViewers()
+    setViewers(vs)
+    setViewer((v) => v || vs[0]?.party || '')
+    return vs
+  }
+  useEffect(() => { refreshViewers() }, [])
 
   async function load() {
-    setView(await client.getDealView(viewer))
+    if (viewer) setView(await client.getDealView(viewer))
   }
   useEffect(() => {
     load()
   }, [viewer])
 
-  const current = viewers.find((v) => v.party === viewer)!
+  const current = viewers.find((v) => v.party === viewer)
   const acceptedOffer = view?.offers.find((o) => o.status === 'accepted')
+  const myOpenOffer = view?.offers.find((o) => current?.role === 'buyer' && o.status === 'open')
+
+  async function invite() {
+    try {
+      const name = inviteName
+      await client.inviteBuyer(viewer, name, inviteTier)
+      setInviteName('')
+      await refreshViewers()
+      setMsg(`Invited ${name} at tier ${inviteTier} — switch the lens to see their view.`)
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
+  async function makeOffer() {
+    try {
+      await client.submitOffer(viewer, Number(bid))
+      setBid('')
+      await load()
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
+  if (!current) return <div className="app booting">Loading the deal room…</div>
 
   async function openDoc(docId: string) {
     try {
@@ -121,6 +153,31 @@ export default function App() {
             looks different to everyone.
           </p>
         </div>
+
+        {current.role === 'seller' && !view?.settled && (
+          <div className="invite">
+            <div className="eyebrow">Invite a buyer</div>
+            <div className="invite-row">
+              <input
+                className="field"
+                placeholder="Buyer name"
+                value={inviteName}
+                onChange={(e) => setInviteName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && inviteName.trim()) invite() }}
+              />
+              <select className="field tier-sel" value={inviteTier} onChange={(e) => setInviteTier(Number(e.target.value))}>
+                <option value={1}>Tier 1</option>
+                <option value={2}>Tier 1+2</option>
+              </select>
+            </div>
+            <button className="btn wide" disabled={!inviteName.trim()} onClick={invite}>
+              Onboard to the deal room
+            </button>
+            <p className="lens-note">
+              Registers a new ledger party and issues their access grant. They appear as a new lens.
+            </p>
+          </div>
+        )}
       </aside>
 
       <main className="stage">
@@ -211,6 +268,22 @@ export default function App() {
             ))}
             {view?.offers.length === 0 && <li className="empty">No offers visible to you.</li>}
           </ul>
+
+          {current.role === 'buyer' && !view?.settled && !myOpenOffer && (
+            <div className="bid-row">
+              <input
+                className="field"
+                inputMode="decimal"
+                placeholder="Your price / unit"
+                value={bid}
+                onChange={(e) => setBid(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && Number(bid) > 0) makeOffer() }}
+              />
+              <button className="btn solid" disabled={!(Number(bid) > 0)} onClick={makeOffer}>
+                Submit bid for {view?.deal.quantity.toLocaleString()} units
+              </button>
+            </div>
+          )}
 
           <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
             <div className="legs">

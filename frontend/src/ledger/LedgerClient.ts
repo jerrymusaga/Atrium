@@ -4,9 +4,16 @@ import type { CloseAttestation, DealView, Viewer } from '../types'
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
 // (queries scoped per party + the executor app driving the AllocationV1 close).
 export interface LedgerClient {
-  viewers(): Viewer[]
+  // The lenses available right now. Async + re-fetchable because the seller can onboard
+  // new buyers at runtime (each becomes a real ledger party).
+  listViewers(): Promise<Viewer[]>
   // Returns the deal AS SEEN BY `viewer` — documents redacted, trail/offers scoped.
   getDealView(viewer: PartyId): Promise<DealView>
+  // Seller onboards a buyer to the deal: ensures the buyer party exists on the ledger and
+  // issues an AccessGrant at the given tier. Returns the new party id.
+  inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId>
+  // Buyer submits a bid (price per unit; quantity defaults to the whole stake on offer).
+  submitOffer(viewer: PartyId, pricePerUnit: number): Promise<void>
   // Buyer opens a document they're entitled to: appends an AccessEvent (audit trail).
   recordAccess(viewer: PartyId, docId: string): Promise<void>
   // Seller accepts a winning offer.

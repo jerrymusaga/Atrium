@@ -18,7 +18,6 @@ app.use(express.json())
 
 // readable demo handles → resolved at request time to full party ids on the ledger
 const SELLER = 'Halden'
-const BUYERS = ['Boranic', 'Meridian']
 const DEAL_ID = 'HALDEN-2026-A'
 
 // Package id of the atrium DAR, learned from any contract's templateId (pkg:Module:Entity).
@@ -178,13 +177,53 @@ async function ensureParty(prefix: string): Promise<string> {
   return j.partyDetails?.party ?? (await resolveParty(prefix))
 }
 
+// Lenses are discovered from the ledger: the seller + every buyer that holds an AccessGrant
+// on this deal. Invite a new buyer (below) and they show up here — fully dynamic.
 app.get('/viewers', async (_req, res) => {
   try {
-    const out: any[] = [{ party: SELLER, label: 'Halden (Seller)', role: 'seller' }]
-    for (const b of BUYERS) {
-      try { await resolveParty(b); out.push({ party: b, label: `${b} (Buyer)`, role: 'buyer' }) } catch { /* not on ledger */ }
-    }
-    res.json(out)
+    await ensurePkg()
+    const seller = await resolveParty(SELLER)
+    const grants = (await activeContracts(seller)).filter((c) => entityOf(c.templateId) === 'AccessGrant')
+    const seen = new Set<string>()
+    const buyers = grants
+      .map((c) => ({ name: labelFor(c.createArgument.buyer), tier: num(c.createArgument.maxTier) }))
+      .filter((b) => (seen.has(b.name) ? false : (seen.add(b.name), true)))
+      .map((b) => ({ party: b.name, label: `${b.name} (Buyer · ${b.tier >= 2 ? 'tier 1+2' : 'tier 1'})`, role: 'buyer' as const }))
+    res.json([{ party: SELLER, label: 'Halden (Seller)', role: 'seller' }, ...buyers])
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Seller onboards a buyer: ensure the buyer party exists on the ledger, then issue an
+// AccessGrant at the chosen tier (signed by the seller, observed by the buyer).
+app.post('/deals/:dealId/invite', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, buyerName, tier } = req.body ?? {}
+    if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can invite buyers' })
+    const name = String(buyerName ?? '').trim()
+    if (!name) return res.status(400).json({ error: 'buyerName required' })
+    const seller = await resolveParty(SELLER)
+    const buyer = await ensureParty(name)
+    const maxTier = Number(tier) >= 2 ? 2 : 1
+    await create(seller, tid('AccessGrant'), { seller, buyer, dealId: DEAL_ID, maxTier, grantedAt: new Date().toISOString() })
+    res.json({ invited: true, party: labelFor(buyer), tier: maxTier })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Buyer submits a bid for the whole stake on offer (signed by the buyer, observed by the seller).
+app.post('/deals/:dealId/offer', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, pricePerUnit } = req.body ?? {}
+    if (!prefix) return res.status(400).json({ error: 'party required' })
+    const price = Number(pricePerUnit)
+    if (!(price > 0)) return res.status(400).json({ error: 'pricePerUnit must be > 0' })
+    const buyer = await resolveParty(prefix)
+    const seller = await resolveParty(SELLER)
+    const dealC = (await activeContracts(seller)).find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    const quantity = dealC ? String(dealC.quantity) : '120000.0'
+    await create(buyer, tid('Offer'), { buyer, seller, dealId: DEAL_ID, pricePerUnit: price.toFixed(4), quantity, submittedAt: new Date().toISOString() })
+    res.json({ submitted: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
