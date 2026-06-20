@@ -11,10 +11,11 @@ the honest production boundary are in **`docs/`** — start with `docs/CONTEXT.m
 
 | Part | Runs now? | How |
 |---|---|---|
-| `frontend/` demo UI | ✅ standalone | in-browser mock ledger — `cd frontend && npm install && npm run dev` |
-| `ledger/` Daml + DvP proof | ✅ with the Daml SDK | `cd ledger && daml build && daml test` |
-| `backend/` executor | ⚠️ stub | returns mock data; `// TODO(ledger)` marks Stage-3 wiring |
-| Real ledger integration | ⛔ Stage 3 | needs cn-quickstart on LocalNet (Docker, JVM 17+, 8GB) |
+| `frontend/` demo UI | ✅ standalone | in-browser mock ledger — `make frontend` |
+| `ledger/` Daml + privacy + DvP proofs | ✅ with the Daml SDK | `make ledger-test` (4 scripts green) |
+| `backend/` executor on a **real Canton ledger** | ✅ no Docker | `make sandbox` then `make backend` — drives the live JSON Ledger API |
+| Frontend ↔ live executor end-to-end | ✅ no Docker | `make sandbox` · `make backend` · `make frontend-live` |
+| Splice/Amulet registry leg | ⛔ Stage 3 | needs cn-quickstart on LocalNet (Docker, JVM 17+, 8GB) |
 
 ## Layout
 ```

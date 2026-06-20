@@ -33,7 +33,7 @@ settles** — payment vs tokenized ownership, atomically, in one transaction.
 - Frontend: React + TypeScript. Backend/executor: the app holds the operator party + talks to the JSON Ledger API.
 
 ## Daml model (in `ledger/daml/Atrium/`)
-- `DealRoom.daml`: `Deal`, `Document` (seller-only signatory), `AccessGrant` (+ `RecordAccess` → `AccessEvent`), `AccessEvent` (append-only), `Offer`. Plus `setupDemo` script.
+- `DealRoom.daml`: `Deal`, `Document` (seller-only signatory), `AccessGrant` (+ `RecordAccess` → `AccessEvent`), `AccessEvent` (append-only), `Offer`. Plus `setupDemo` and `testPrivacyProjection` (proves rivals are invisible + the access trail is scoped per party).
 - `Dvp.daml`: mock `Holding` / `Allocation` / `AllocationFactory` / `SettlementCoordinator` + two proof scripts (`testAtomicDvP`, `testAtomicityHolds`). These MOCKS mirror CIP-56 and get swapped for the real Splice interfaces in Stage 3.
 
 ## MVP scope
@@ -57,5 +57,32 @@ Production-VALID patterns + current libraries (the same DvP machinery as Tradewe
 - `backend/` — executor-app stub with Ledger API integration TODOs.
 - `docs/` — this file, `ASSESSMENT.md`, `USER_STORY.md`.
 
+## Status / what's verified
+- **Stage 2 GREEN (local SDK, no LocalNet).** `cd ledger && daml build && daml test` → all 4 scripts ok:
+  `setupDemo`, `testPrivacyProjection` (privacy half), `testAtomicDvP` + `testAtomicityHolds` (close half).
+  SDK pinned to the installed snapshot `3.3.0-snapshot.20250930.0` in `daml.yaml` (was an invalid `3.3.0`).
+- **Stage 2.5 GREEN — running on a REAL Canton ledger, still no Docker.** `daml sandbox --json-api-port 7575`
+  runs a full Canton participant + JSON Ledger API v2; `daml start` uploads `atrium.dar` and runs `setupDemo`.
+  The `backend/` executor is now LIVE (not a stub): it resolves parties, serves party-scoped views, and drives
+  RecordAccess / Accept / the atomic Dvp close over the real API. Verified by hand:
+  - **Selective disclosure holds on the ledger.** Halden sees Deal+2 Docs+2 Grants+3 Events+Offer; Boranic
+    (tier 1) sees only its own Grant + Event — **no documents, no rival's offer**; Meridian sees only its own.
+  - **Atomic close works live** (cash→seller, equity→buyer in one tx) and **all-or-nothing holds** (pull a leg →
+    `Settle` fails → nothing moves), driven through the executor's `/settle` and `/settle {break:true}`.
+  - Only the Splice/Amulet *registry leg* still needs LocalNet; everything else is real today.
+- **Frontend uniqueness pass.** The close is now an animated atomic-swap moment; a seller "Stress-test: pull a
+  leg" control visualizes all-or-nothing (mirrors `testAtomicityHolds`); the Regulator lens actively attests the
+  close matched the recorded bid without tier-2 access; a footer ties the UI claims back to the `daml test` proofs.
+  Set `VITE_LIVE=1` to point the UI at the live executor instead of the in-browser mock.
+
+## How to run
+- **Mock demo (fastest, no ledger):** `make frontend` → http://localhost:5173
+- **Live stack (real Canton, no Docker), 3 terminals:** `make sandbox` · `make backend` · `make frontend-live`
+- **Proofs:** `make ledger-test`
+
 ## Immediate next action
-Stand up cn-quickstart on LocalNet (Stage 1), then run the `Dvp.daml` proof scripts (Stage 2). That converts the design from "asserted" to "verified."
+Stage 3: stand up cn-quickstart on LocalNet (Docker, JVM 17+, 8GB) and re-run the close against a real
+registry leg (Amulet), swapping the `Dvp.daml` mocks for the real Splice interfaces, and point the executor at
+LocalNet (`LEDGER_API_URL` + `LEDGER_TOKEN` are already plumbed through `backend/src/ledgerApi.ts`). **Gate:**
+Stage 3 green → proceed; red → fall back to sealed-bid issuance (same close, one privacy surface). Docker was
+down this session, so Stage 2.5 (real ledger, local sandbox) stands in as the proof until LocalNet is up.
