@@ -85,8 +85,17 @@ Production-VALID patterns + current libraries (the same DvP machinery as Tradewe
 - **Proofs:** `make ledger-test`
 
 ## Immediate next action
-Stage 3: stand up cn-quickstart on LocalNet (Docker, JVM 17+, 8GB) and re-run the close against a real
-registry leg (Amulet), swapping the `Dvp.daml` mocks for the real Splice interfaces, and point the executor at
-LocalNet (`LEDGER_API_URL` + `LEDGER_TOKEN` are already plumbed through `backend/src/ledgerApi.ts`). **Gate:**
-Stage 3 green → proceed; red → fall back to sealed-bid issuance (same close, one privacy surface). Docker was
-down this session, so Stage 2.5 (real ledger, local sandbox) stands in as the proof until LocalNet is up.
+Stage 3: stand up cn-quickstart on LocalNet and re-run the close against the real Amulet registry leg.
+Full runbook + the exact Atrium deploy/executor wiring is in **`docs/STAGE3.md`**.
+
+**Blocked on hardware here, not code.** Attempted this session: Docker is up, JVM 21 ✓, but Splice LocalNet's
+resource-constrained profile declares **~13 GB** of container memory (Docker VM had 3.8 GiB; host is 8 GB).
+LocalNet realistically needs a **≥16 GB** machine or cloud VM. The quickstart also expects a **nix + direnv**
+toolchain (not installed here) that pins `DAML_RUNTIME_VERSION=3.4.11` / `SPLICE_VERSION=0.5.3`.
+
+Good news: the executor is already API-compatible — LocalNet exposes the same JSON Ledger API v2 the sandbox
+does, so Stage 3 is endpoint + JWT + the Amulet cash-leg swap (`LEDGER_API_URL` / `LEDGER_TOKEN` / `LEDGER_USER_ID`
+are plumbed through `backend/src/ledgerApi.ts`). Until a ≥16 GB host is available, **Stage 2.5 (real Canton
+ledger via `daml sandbox`) is the standing proof.** cn-quickstart is cloned at `~/cn-quickstart`.
+
+**Gate:** Stage 3 green → proceed; red → fall back to sealed-bid issuance (same close, one privacy surface).
