@@ -44,7 +44,32 @@ VITE_LIVE=1 npm --prefix frontend run dev   # the UI, live on the hosted network
 ```
 `GET http://localhost:8080/health` should report Seaport's `ledgerApi` URL and a party count > 0.
 
-## What I need from the Seaport dashboard to finish the wiring
+## Getting access — step by step
+Do this once to obtain the four values the executor needs. Labels may differ slightly in the Seaport UI;
+the goal is to capture the connection + auth details for your validator.
+
+1. **Sign in.** Go to https://app.devnet.seaport.to and authenticate with the **Loop DevNet wallet**
+   (create the wallet first if you don't have one). For a hackathon team, ask for access to the shared
+   **"5n sandbox"** validator, or create an **Organization** (App Provider) which provisions a validator.
+2. **Find your validator's connection details.** Open the validator's settings / "connect" / API panel.
+   Capture the **JSON Ledger API v2 base URL** (e.g. `https://<validator>.devnet.seaport.to`). → `LEDGER_API_URL`
+3. **Capture auth.** The validator sits behind an **OIDC issuer**. In the validator/auth settings, note the
+   **OIDC Issuer URL** and create/copy a **client id + secret** (a service account / API client), plus any
+   **audience/scope** it lists. → `OIDC_ISSUER` (or `OIDC_TOKEN_URL`), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`.
+   - *Fast alternative for testing:* open browser devtools → Network on any ledger call → copy the
+     `Authorization: Bearer …` value → set `LEDGER_TOKEN` and skip OIDC for now.
+4. **User id.** Note the ledger **user id** the validator expects for your app (often shown beside the API
+   details or the app-user registration). → `LEDGER_USER_ID`
+5. **Amulet?** Check whether the validator exposes **Canton Coin / a faucet** (a wallet balance or
+   "tap"/faucet action). Yes → full Stage 3 is reachable; no → hosted Stage 2.5 (mock cash leg).
+6. **Deploy the DAR** (`ledger/.daml/dist/atrium-0.1.0.dar`) via the Seaport IDE's deploy, or `/v2/packages`.
+7. **For multi-validator** (see `docs/TOPOLOGY.md`): each teammate repeats 1–4 on their own personal
+   validator, allocates their **buyer party**, and shares their **party id** + **JSON API URL**. Confirm all
+   validators share one synchronizer.
+
+Then fill `backend/.env` (template in `.env.example`) and run the executor + `frontend-live`.
+
+## Paste these back and I'll finish the wiring
 1. **JSON Ledger API v2 base URL** of your validator.
 2. **OIDC**: issuer (or token URL), client id/secret, and any required audience/scope — or a session JWT.
 3. **User id** the validator expects, and confirmation parties can be allocated via `/v2/parties` (vs. pre-created).
