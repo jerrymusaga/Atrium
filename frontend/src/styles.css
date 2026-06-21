@@ -42,10 +42,7 @@ body {
   gap: 28px;
 }
 .brand { display: flex; align-items: center; gap: 12px; }
-.mark {
-  font-size: 26px; color: var(--steel); line-height: 1;
-  letter-spacing: -2px;
-}
+.mark { flex: none; display: block; }
 .brand-name { font-family: var(--display); font-weight: 700; letter-spacing: 4px; font-size: 18px; }
 .brand-sub { color: var(--muted); font-size: 12px; letter-spacing: 0.3px; }
 

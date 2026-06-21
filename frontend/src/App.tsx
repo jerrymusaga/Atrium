@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
+import { AtriumMark } from './AtriumMark'
 import type { CloseAttestation, DealView, Viewer } from './types'
 
 // VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
@@ -115,7 +116,7 @@ export default function App() {
     <div className="app">
       <aside className="rail">
         <div className="brand">
-          <span className="mark">▚</span>
+          <AtriumMark className="mark" />
           <div>
             <div className="brand-name">ATRIUM</div>
             <div className="brand-sub">the deal room that closes</div>
