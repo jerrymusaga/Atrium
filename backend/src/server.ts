@@ -244,15 +244,23 @@ app.get('/viewers', async (_req, res) => {
 app.post('/deals/:dealId/invite', async (req, res) => {
   try {
     await ensurePkg()
-    const { party: prefix, buyerName, tier } = req.body ?? {}
+    const { party: prefix, buyerName, buyerParty, tier } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can invite buyers' })
-    const name = String(buyerName ?? '').trim()
-    if (!name) return res.status(400).json({ error: 'buyerName required' })
     const seller = await partyId(SELLER)
-    const buyer = await ensureParty(name)
-    const maxTier = Number(tier) >= 2 ? 2 : 1; const maxTierStr = String(maxTier)
-    await create(seller, tid('AccessGrant'), { seller, buyer, dealId: DEAL_ID, maxTier: maxTierStr, grantedAt: new Date().toISOString() })
-    res.json({ invited: true, party: labelFor(buyer), tier: maxTier })
+    const maxTier = Number(tier) >= 2 ? 2 : 1
+    // Two modes: allocate a fresh local buyer (buyerName), or invite an EXISTING party by its full
+    // id (buyerParty) — e.g. a teammate on another validator. Cross-node disclosure routes the grant
+    // to their participant via the shared synchronizer; we don't allocate or hold rights for them.
+    let buyer: string
+    if (buyerParty && String(buyerParty).includes('::')) {
+      buyer = String(buyerParty).trim()
+    } else {
+      const name = String(buyerName ?? '').trim()
+      if (!name) return res.status(400).json({ error: 'buyerName or buyerParty required' })
+      buyer = await ensureParty(name)
+    }
+    await create(seller, tid('AccessGrant'), { seller, buyer, dealId: DEAL_ID, maxTier: String(maxTier), grantedAt: new Date().toISOString() })
+    res.json({ invited: true, party: labelFor(buyer), tier: maxTier, external: Boolean(buyerParty) })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
