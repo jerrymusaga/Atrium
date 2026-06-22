@@ -8,9 +8,10 @@
 // Runs today against `daml sandbox --json-api-port 7575` (no Docker). Point LEDGER_API_URL
 // + LEDGER_TOKEN at LocalNet for Stage 3; the Dvp leg swaps for the real Splice registry.
 
+import './env.js' // load backend/.env first (mirrors ledgerApi; safe if already loaded)
 import express from 'express'
 import {
-  activeContracts, allocatePartyByHint, create, entityOf, exercise, listParties, resolveParty, type CreatedEvent,
+  activeContracts, allocatePartyByHint, create, entityOf, exercise, grantActAs, listParties, USER_ID, type CreatedEvent,
 } from './ledgerApi.js'
 
 const app = express()
@@ -20,8 +21,32 @@ app.use(express.json())
 const SELLER = 'Halden'
 const DEAL_ID = 'HALDEN-2026-A'
 
-// Package id of the atrium DAR, learned from any contract's templateId (pkg:Module:Entity).
-let PKG: string | null = null
+// Party namespacing. On the local sandbox parties are bare ("Halden"). On a SHARED hosted
+// validator (Seaport) names collide across teams, so we prefix our hints (PARTY_PREFIX, e.g.
+// "atrium-"). Logical names ("Halden"/"Boranic") flow through the API and UI either way.
+const PARTY_PREFIX = process.env.PARTY_PREFIX ?? ''
+const hint = (logical: string) => `${PARTY_PREFIX}${logical}`
+// Does a full party id (local-part::namespace) correspond to this logical name?
+function matchesLogical(full: string, logical: string): boolean {
+  const local = full.split('::')[0]
+  const h = hint(logical)
+  return local === h || local.startsWith(h + '-') // sandbox appends "-<hash>"; hosted doesn't
+}
+// Invert: full party id → logical display name (strip namespace, prefix, and any "-<hash>").
+function displayName(full: string): string {
+  let local = full.split('::')[0]
+  if (PARTY_PREFIX && local.startsWith(PARTY_PREFIX)) local = local.slice(PARTY_PREFIX.length)
+  const m = local.match(/^(.*?)-[0-9a-f]{6,}$/i)
+  return m ? m[1] : local
+}
+
+// Should the executor grant its ledger user CanActAs on parties it acts as? Needed on hosted
+// validators (the token is one user); the sandbox's admin user doesn't need it.
+const GRANT_ACT_AS = process.env.LEDGER_GRANT_ACT_AS === '1'
+
+// Package id of the atrium DAR. Prefer an explicit env (works before any contract exists, e.g.
+// a freshly-seeded hosted ledger); otherwise learn it from any on-ledger contract.
+let PKG: string | null = process.env.ATRIUM_PKG ?? null
 const DVP_ENTITIES = new Set(['Holding', 'Allocation', 'AllocationFactory', 'SettlementCoordinator'])
 function tid(entity: string): string {
   if (!PKG) throw new Error('package id not resolved yet')
@@ -30,15 +55,49 @@ function tid(entity: string): string {
 }
 async function ensurePkg(): Promise<void> {
   if (PKG) return
-  const seller = await resolveParty(SELLER)
-  const cs = await activeContracts(seller)
-  const any = cs[0]
-  if (!any) throw new Error('No contracts on ledger — run `daml start` with init-script setupDemo')
+  const seller = await partyId(SELLER)
+  const any = (await activeContracts(seller))[0]
+  if (!any) throw new Error('No Atrium contracts yet — POST /deals/:id/seed first (or set ATRIUM_PKG)')
   PKG = any.templateId.split(':')[0]
 }
 
+// On a hosted validator every party shares the participant's namespace fingerprint, so we can
+// construct full ids directly (PARTY_NAMESPACE) instead of scanning the 10k-party list. Resolved
+// ids are cached per logical name. Falls back to listing when no namespace is configured (sandbox).
+const PARTY_NAMESPACE = process.env.PARTY_NAMESPACE ?? ''
+const partyCache = new Map<string, string>()
+
+async function partyId(logical: string): Promise<string> {
+  const cached = partyCache.get(logical)
+  if (cached) return cached
+  if (PARTY_NAMESPACE) {
+    const id = `${hint(logical)}::${PARTY_NAMESPACE}`
+    partyCache.set(logical, id)
+    return id
+  }
+  const hit = (await listParties()).find((p) => matchesLogical(p, logical))
+  if (!hit) throw new Error(`no party for "${logical}" (hint "${hint(logical)}") — seed/onboard it first`)
+  partyCache.set(logical, hit)
+  return hit
+}
+
+// Resolve-or-allocate a logical party, and (on hosted validators) ensure our user can act as it.
+async function ensureParty(logical: string): Promise<string> {
+  let party: string
+  if (PARTY_NAMESPACE) {
+    party = `${hint(logical)}::${PARTY_NAMESPACE}`
+    try { await allocatePartyByHint(hint(logical)) } catch { /* already allocated — fine */ }
+  } else {
+    const existing = (await listParties()).find((p) => matchesLogical(p, logical))
+    party = existing ?? (await allocatePartyByHint(hint(logical)))
+  }
+  if (GRANT_ACT_AS) await grantActAs(party)
+  partyCache.set(logical, party)
+  return party
+}
+
 const num = (s: any) => Number(s)
-const labelFor = (full: string) => full.split('-')[0].split('::')[0]
+const labelFor = displayName
 
 // --- party-scoped read: the same deal, projected per party by the ledger itself ---
 
@@ -47,7 +106,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
     await ensurePkg()
     const prefix = String(req.query.party ?? '')
     if (!prefix) return res.status(400).json({ error: 'Pass ?party=Halden|Boranic|Meridian' })
-    const party = await resolveParty(prefix)
+    const party = await partyId(prefix)
     const isSeller = prefix === SELLER
 
     const mine = await activeContracts(party) // what THIS party may see — ledger-scoped
@@ -55,7 +114,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
 
     // Shared deal context (index of the room). Documents/Deal are seller-signatory, so the
     // executor reads the manifest as the seller; CONTENTS/hash access stay gated below.
-    const seller = await resolveParty(SELLER)
+    const seller = await partyId(SELLER)
     const sellerView = isSeller ? mine : await activeContracts(seller)
     const dealC = sellerView.find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
     const docManifest = sellerView.filter((c) => entityOf(c.templateId) === 'Document').map((c) => c.createArgument)
@@ -97,7 +156,7 @@ app.post('/deals/:dealId/access', async (req, res) => {
     await ensurePkg()
     const { party: prefix, docId } = req.body ?? {}
     if (!prefix || !docId) return res.status(400).json({ error: 'party and docId required' })
-    const party = await resolveParty(prefix)
+    const party = await partyId(prefix)
     const mine = await activeContracts(party)
     const grant = mine.find((c) => entityOf(c.templateId) === 'AccessGrant')
     if (!grant) return res.status(403).json({ error: 'No access grant for this party' })
@@ -112,7 +171,7 @@ app.post('/deals/:dealId/accept', async (req, res) => {
     await ensurePkg()
     const { party: prefix, offerId } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller accepts offers' })
-    const seller = await resolveParty(SELLER)
+    const seller = await partyId(SELLER)
     const offer = (await activeContracts(seller)).find((c) => c.contractId === offerId)
     if (!offer) return res.status(404).json({ error: 'Offer not visible / not found' })
     await exercise(seller, offer.templateId, offer.contractId, 'Accept', {})
@@ -130,8 +189,8 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     const ref = `${DEAL_ID}-${Date.now()}`
     const registry = await ensureParty('Registry')
     const operator = await ensureParty('AtriumApp')
-    const seller = await resolveParty(SELLER)
-    const buyer = await resolveParty('Meridian')
+    const seller = await partyId(SELLER)
+    const buyer = await partyId('Meridian')
 
     const cashH = await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'USD-CASH', amount: '4200000.0' })
     const eqH = await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
@@ -164,19 +223,12 @@ function ex1(txResult: any): CreatedEvent {
   return ev as CreatedEvent
 }
 
-async function ensureParty(prefix: string): Promise<string> {
-  const all = await listParties()
-  const hit = all.find((p) => p.startsWith(prefix + '-') || p.startsWith(prefix + '::') || p === prefix)
-  if (hit) return hit
-  return allocatePartyByHint(prefix)
-}
-
 // Lenses are discovered from the ledger: the seller + every buyer that holds an AccessGrant
 // on this deal. Invite a new buyer (below) and they show up here — fully dynamic.
 app.get('/viewers', async (_req, res) => {
   try {
     await ensurePkg()
-    const seller = await resolveParty(SELLER)
+    const seller = await partyId(SELLER)
     const grants = (await activeContracts(seller)).filter((c) => entityOf(c.templateId) === 'AccessGrant')
     const seen = new Set<string>()
     const buyers = grants
@@ -196,10 +248,10 @@ app.post('/deals/:dealId/invite', async (req, res) => {
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can invite buyers' })
     const name = String(buyerName ?? '').trim()
     if (!name) return res.status(400).json({ error: 'buyerName required' })
-    const seller = await resolveParty(SELLER)
+    const seller = await partyId(SELLER)
     const buyer = await ensureParty(name)
-    const maxTier = Number(tier) >= 2 ? 2 : 1
-    await create(seller, tid('AccessGrant'), { seller, buyer, dealId: DEAL_ID, maxTier, grantedAt: new Date().toISOString() })
+    const maxTier = Number(tier) >= 2 ? 2 : 1; const maxTierStr = String(maxTier)
+    await create(seller, tid('AccessGrant'), { seller, buyer, dealId: DEAL_ID, maxTier: maxTierStr, grantedAt: new Date().toISOString() })
     res.json({ invited: true, party: labelFor(buyer), tier: maxTier })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -212,8 +264,8 @@ app.post('/deals/:dealId/offer', async (req, res) => {
     if (!prefix) return res.status(400).json({ error: 'party required' })
     const price = Number(pricePerUnit)
     if (!(price > 0)) return res.status(400).json({ error: 'pricePerUnit must be > 0' })
-    const buyer = await resolveParty(prefix)
-    const seller = await resolveParty(SELLER)
+    const buyer = await partyId(prefix)
+    const seller = await partyId(SELLER)
     const dealC = (await activeContracts(seller)).find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
     const quantity = dealC ? String(dealC.quantity) : '120000.0'
     await create(buyer, tid('Offer'), { buyer, seller, dealId: DEAL_ID, pricePerUnit: price.toFixed(4), quantity, submittedAt: new Date().toISOString() })
@@ -221,9 +273,56 @@ app.post('/deals/:dealId/offer', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
+// Seed a fresh (hosted) ledger with the demo, equivalent to ledger/setupDemo but over the
+// JSON API: Deal + 2 Documents + 2 tiered AccessGrants + a few accesses + Meridian's bid.
+// Idempotent — skips if a Deal already exists. Needs ATRIUM_PKG set (the uploaded DAR's pkg id).
+app.post('/deals/:dealId/seed', async (_req, res) => {
+  try {
+    if (!PKG) return res.status(400).json({ error: 'set ATRIUM_PKG to the uploaded DAR package id before seeding' })
+    const seller = await ensureParty(SELLER)
+    const boranic = await ensureParty('Boranic')
+    const meridian = await ensureParty('Meridian')
+    const now = new Date().toISOString()
+    const did: string[] = []
+
+    // Idempotent: inspect what already exists for the seller and create only what's missing,
+    // so a half-run (e.g. interrupted) converges on re-run without duplicating.
+    const acs = await activeContracts(seller)
+    const has = (e: string, pred: (a: any) => boolean = () => true) =>
+      acs.some((c) => entityOf(c.templateId) === e && pred(c.createArgument))
+    const grantFor = (full: string) => acs.find((c) => entityOf(c.templateId) === 'AccessGrant' && c.createArgument.buyer === full)
+
+    if (!has('Deal')) { await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 12% secondary', instrument: 'HALDEN-EQUITY', quantity: '120000.0' }); did.push('Deal') }
+    if (!has('Document', (a) => a.docId === 'teaser')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'teaser', title: 'Investment teaser', tier: '1', contentHash: 'sha256:aa11', blobPointer: 's3://atrium/halden/teaser.enc' }); did.push('Document:teaser') }
+    if (!has('Document', (a) => a.docId === 'financials')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'financials', title: 'Audited financials', tier: '2', contentHash: 'sha256:bb22', blobPointer: 's3://atrium/halden/financials.enc' }); did.push('Document:financials') }
+
+    let gA = grantFor(boranic)
+    if (!gA) { gA = await create(seller, tid('AccessGrant'), { seller, buyer: boranic, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Boranic') }
+    let gB = grantFor(meridian)
+    if (!gB) { gB = await create(seller, tid('AccessGrant'), { seller, buyer: meridian, dealId: DEAL_ID, maxTier: '2', grantedAt: now }); did.push('Grant:Meridian') }
+
+    if (!has('AccessEvent')) {
+      await exercise(boranic, gA.templateId, gA.contractId, 'RecordAccess', { docId: 'teaser' })
+      await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'teaser' })
+      await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'financials' })
+      did.push('AccessEvents')
+    }
+    if (!has('Offer')) { await create(meridian, tid('Offer'), { buyer: meridian, seller, dealId: DEAL_ID, pricePerUnit: '35.0000', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
+
+    res.json({ seeded: did.length > 0, created: did, seller: displayName(seller), buyers: [displayName(boranic), displayName(meridian)] })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
 app.get('/health', async (_req, res) => {
-  try { const parties = await listParties(); res.json({ ok: true, ledgerApi: process.env.LEDGER_API_URL ?? 'http://localhost:7575', parties: parties.length }) }
-  catch (e) { res.status(503).json({ ok: false, error: (e as Error).message }) }
+  try {
+    const parties = await listParties()
+    res.json({
+      ok: true,
+      ledgerApi: process.env.LEDGER_API_URL ?? 'http://localhost:7575',
+      userId: USER_ID, partyPrefix: PARTY_PREFIX || '(none)', grantActAs: GRANT_ACT_AS, pkg: PKG ?? '(unresolved)',
+      parties: parties.length,
+    })
+  } catch (e) { res.status(503).json({ ok: false, error: (e as Error).message }) }
 })
 
 const PORT = Number(process.env.PORT ?? 8080)

@@ -1,10 +1,11 @@
 // Minimal client for the Canton JSON Ledger API v2 (the one `daml sandbox --json-api-port`
-// serves, and the same API LocalNet exposes). Verified by hand against the running sandbox
-// before wiring — see docs/CONTEXT.md "Stage 2.5". No auth on local sandbox; LocalNet adds
-// a JWT (set LEDGER_TOKEN and it rides through as a Bearer header).
+// serves, and the same API LocalNet / Seaport hosted validators expose). Verified by hand
+// against both the sandbox and the Seaport devnet validator before wiring. Auth: none on the
+// local sandbox; a Bearer JWT (static or OIDC-exchanged) on hosted validators.
+import './env.js' // must run first: loads backend/.env before the config consts below
 
 const BASE = process.env.LEDGER_API_URL ?? 'http://localhost:7575'
-const USER_ID = process.env.LEDGER_USER_ID ?? 'participant_admin'
+export const USER_ID = process.env.LEDGER_USER_ID ?? 'participant_admin'
 
 // Auth, in order of precedence:
 //   1. LEDGER_TOKEN          — a static Bearer JWT (sandbox needs none; paste one to test fast)
@@ -93,6 +94,16 @@ export async function allocatePartyByHint(partyIdHint: string): Promise<string> 
   const r = await api<{ partyDetails?: { party: string } }>('/v2/parties', { partyIdHint, identityProviderId: '' })
   if (!r.partyDetails?.party) throw new Error(`party allocation returned no party for hint "${partyIdHint}"`)
   return r.partyDetails.party
+}
+
+// Grants the executor's ledger user (USER_ID) the right to act as `party`. On a hosted validator
+// the token authenticates as one user, which must hold CanActAs for every party we submit as.
+// Idempotent: re-granting an existing right is a no-op. (Sandbox doesn't need this — see server.)
+export async function grantActAs(party: string): Promise<void> {
+  await api(`/v2/users/${encodeURIComponent(USER_ID)}/rights`, {
+    userId: USER_ID,
+    rights: [{ kind: { CanActAs: { value: { party } } } }],
+  })
 }
 
 // Resolves the full party id (e.g. "Halden-d4d9::1220…") from the readable prefix the
