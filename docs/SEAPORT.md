@@ -75,6 +75,25 @@ Then fill `backend/.env` (template in `.env.example`) and run the executor + `fr
 3. **User id** the validator expects, and confirmation parties can be allocated via `/v2/parties` (vs. pre-created).
 4. Whether the validator has **Amulet/Canton Coin** (decides Stage 2.5-hosted vs. full Stage 3).
 
+## Cross-node: vetting the package on a teammate's participant
+To invite a buyer whose party lives on **another** validator (true multi-node privacy), that
+participant must also have the Atrium DAR uploaded + vetted — Canton requires every participant
+hosting a stakeholder to know the package. Symptom if it's missing, when the seller tries to grant
+the remote party: `NO_SYNCHRONIZER_FOR_SUBMISSION … Participant PAR::… has not vetted <pkgId>`.
+
+On the buyer's validator (build the identical DAR first — `cd ledger && daml build`):
+```bash
+# get a token for THAT validator (its own OIDC client), then:
+curl -X POST '<their-validator-ledger-api>/v2/packages' \
+  -H "Authorization: Bearer <their-token>" \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary @ledger/.daml/dist/atrium-0.1.0.dar
+```
+…or deploy it from the Seaport IDE against that validator. Both participants must share a
+synchronizer (they do on the Seaport devnet — `global-domain::…`). Once vetted, the seller's
+`POST /deals/:id/invite {"buyerParty":"<their full party id>","tier":1}` routes cross-node, and the
+buyer sees their scoped projection from their own node.
+
 ## Notes
 - Seaport also documents a TS client, `@c7/ledger`, for browser→ledger calls. Atrium keeps the **executor**
   in the middle (it holds the operator party and composes party-scoped views), so we use our own JSON v2 client
