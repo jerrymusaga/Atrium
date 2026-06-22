@@ -98,6 +98,17 @@ does, so Stage 3 is endpoint + JWT + the Amulet cash-leg swap (`LEDGER_API_URL` 
 are plumbed through `backend/src/ledgerApi.ts`). Until a ≥16 GB host is available, **Stage 2.5 (real Canton
 ledger via `daml sandbox`) is the standing proof.** cn-quickstart is cloned at `~/cn-quickstart`.
 
+### LIVE ON SEAPORT (hosted Canton validator) ✅ — done, no local RAM
+Atrium runs end-to-end on Seaport's devnet **5n sandbox** validator
+(`https://ledger-api.validator.devnet.sandbox.fivenorth.io`). Verified: OIDC token exchange, DAR upload,
+party allocation, demo seed (`POST /deals/:id/seed`, setupDemo-over-JSON), and party-scoped views —
+**selective disclosure holds on real hosted infra** (Boranic sees neither the rival offer nor tier-2 docs).
+Executor knobs (in gitignored `backend/.env`): `LEDGER_USER_ID=6`, `LEDGER_GRANT_ACT_AS=1`, `PARTY_PREFIX=atrium-`,
+`PARTY_NAMESPACE=<validator fingerprint>`, `ATRIUM_PKG=dbec7f65…`, OIDC creds. Note: it's a **shared** validator
+(single node) → this is hosted **Phase 0**; cross-node privacy needs separate org validators (the Encode org).
+Gotchas found: Int64 fields must be JSON **strings**; the token authenticates as user "6" which must hold
+`CanActAs` per party; 10k-party list → construct ids from the shared namespace instead of scanning.
+
 ### Better path than local LocalNet: Seaport (hosted validators) — see `docs/SEAPORT.md`
 [Seaport](https://app.devnet.seaport.to) hosts Canton validators that expose the **same JSON Ledger API v2**, so
 Atrium runs on a **real hosted network with no local RAM cost**. The executor now supports **OIDC
