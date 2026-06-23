@@ -22,8 +22,11 @@ Don't add features. The product is strong; every hour now goes to making it *leg
 One-liner: **"The data room that closes."**
 
 ## Demo video — shot list (~2.5 min)
-Record the **mock UI** (`make frontend`) for smooth, deterministic visuals; cut to a terminal for the
-live/proof credibility beats.
+**Record the LIVE app** (`make sandbox` is NOT needed — point at Seaport): `make backend` + `make
+frontend-live`. Everything below runs against a **real hosted Canton validator**, not a mock. Lens-flips
+are prefetched so they're instant despite validator latency. Re-runnable: `POST /deals/HALDEN-2026-A/reset-close`
+between takes resets the close to pre-settle. (The in-browser mock, `make frontend`, stays as an offline
+fallback only — do not lead with it.)
 
 1. **Hook (0:00–0:15)** — title card + the pitch's first two sentences. Land "the room itself settles."
 2. **The privacy money shot (0:15–0:55)** — flip the lens:
@@ -63,6 +66,10 @@ live/proof credibility beats.
 - "Built on Canton": selective disclosure + native atomic DvP (CIP-56/Splice), live on a Seaport validator
 
 ## Recording tips
-- Mock UI for the visual flow (no network latency); terminal for the proofs + live curl.
+- **Live UI** (`make frontend-live`) — it's on real Canton and now snappy (prefetched lenses). The
+  footer shows "● LIVE on Canton" — keep it in frame; it's proof this isn't a mock.
+- Between takes, reset the close: `curl -X POST localhost:8080/deals/HALDEN-2026-A/reset-close`.
+- Terminal cutaway for `make ledger-test` (5 green) + a live `curl` of a buyer view (rival offer absent).
 - Reduced-motion off so the swap/redaction animations play.
-- Keep it under 3 min. Lead with the privacy flip — it's the thing nobody else can show.
+- Keep it under 3 min. Lead with the multi-tier privacy flip — a *multi-party deal room*, not a two-party
+  toy. That depth is the thing competitors' broad platforms don't have.

@@ -152,14 +152,17 @@ app.get('/deals/:dealId/view', async (req, res) => {
       const o = c.createArgument
       return { offerId: c.contractId, buyer: o.buyer, buyerLabel: labelFor(o.buyer), pricePerUnit: num(o.pricePerUnit), quantity: num(o.quantity), submittedAt: String(o.submittedAt).slice(11, 16), status: 'open' as const, kyc: kycOf(o.buyer) }
     })
-    const holdings = byEntity('Holding').map((c) => {
-      const h = c.createArgument
-      return { owner: h.owner, ownerLabel: labelFor(h.owner), instrument: h.instrument, amount: num(h.amount) }
-    })
+    // The DvP legs live as Holdings whose admin is the Registry (it sees both). Read them there
+    // so the close panel shows both sides; `settled` is derived from on-ledger ownership: once
+    // the cash leg is owned by the seller, the atomic swap has happened.
+    const registry = await partyId('Registry')
+    const regHoldings = (await acsOf(registry)).filter((c) => entityOf(c.templateId) === 'Holding').map((c) => c.createArgument)
+    const holdings = regHoldings.map((h: any) => ({ owner: h.owner, ownerLabel: labelFor(h.owner), instrument: h.instrument, amount: num(h.amount) }))
+    const settled = regHoldings.some((h: any) => h.instrument === 'USD-CASH' && labelFor(h.owner) === SELLER)
 
     res.json({
       deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity) } : null,
-      documents, accessTrail, offers, holdings, settled: false,
+      documents, accessTrail, offers, holdings, settled,
       kyc: isSeller ? null : kycOf(party), // the viewing buyer's own clearance
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
@@ -208,17 +211,20 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     await ensurePkg()
     const breakLeg = Boolean(req.body?.break)
     const ref = `${DEAL_ID}-${Date.now()}`
-    const registry = await ensureParty('Registry')
+    const registry = await partyId('Registry')
     const operator = await ensureParty('AtriumApp')
     const seller = await partyId(SELLER)
     const buyer = await partyId('Meridian')
 
-    const cashH = await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'USD-CASH', amount: '4200000.0' })
-    const eqH = await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
-    const factory = await create(registry, tid('AllocationFactory'), { admin: registry, users: [buyer, seller] })
+    // Use the seeded legs (real Holdings) so the swap actually moves on-ledger ownership.
+    const regAcs = await acsOf(registry)
+    const cashH = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'USD-CASH' && c.createArgument.owner === buyer)
+    const eqH = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'HALDEN-EQUITY' && c.createArgument.owner === seller)
+    const factory = regAcs.find((c) => entityOf(c.templateId) === 'AllocationFactory')
+    if (!cashH || !eqH || !factory) return res.status(409).json({ error: 'legs not ready (seed first) or already settled' })
+
     const settleBefore = new Date(Date.now() + 24 * 3600_000).toISOString()
     const coord = await create(operator, tid('SettlementCoordinator'), { executor: operator, settlementRef: ref, settleBefore })
-
     const cashAlloc = ex1(await exercise(buyer, factory.templateId, factory.contractId, 'Allocate', { holdingCid: cashH.contractId, settlementRef: ref, legId: 'cash', sender: buyer, receiver: seller, executor: operator }))
     const eqAlloc = ex1(await exercise(seller, factory.templateId, factory.contractId, 'Allocate', { holdingCid: eqH.contractId, settlementRef: ref, legId: 'ownership', sender: seller, receiver: buyer, executor: operator }))
 
@@ -228,12 +234,30 @@ app.post('/deals/:dealId/settle', async (req, res) => {
         await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
         return res.status(500).json({ error: 'expected the broken close to fail' })
       } catch {
+        await exercise(buyer, cashAlloc.templateId, cashAlloc.contractId, 'Allocation_Withdraw', {}) // restore the cash leg → state unchanged, re-runnable
         return res.json({ settled: false, atomic: true, rolledBack: true, note: 'One leg was pulled → Settle failed → neither side moved.' })
       }
     }
 
     await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
     res.json({ settled: true, atomic: true, settlementRef: ref, cashToSeller: 4200000, equityToBuyer: 120000 })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Reset the close to its pre-settle state (re-runnable demo): archive the DvP holdings and
+// recreate the two legs (cash→buyer, equity→seller). Handy between recording takes.
+app.post('/deals/:dealId/reset-close', async (_req, res) => {
+  try {
+    await ensurePkg()
+    const registry = await partyId('Registry')
+    const seller = await partyId(SELLER)
+    const buyer = await partyId('Meridian')
+    for (const c of (await acsOf(registry)).filter((x) => entityOf(x.templateId) === 'Holding')) {
+      await exercise(registry, c.templateId, c.contractId, 'Archive', {})
+    }
+    await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'USD-CASH', amount: '4200000.0' })
+    await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
+    res.json({ reset: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -341,6 +365,16 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     if (!has('KYCAttestation', (a) => a.subject === boranic)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
     if (!has('KYCAttestation', (a) => a.subject === meridian)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: meridian, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Meridian') }
     if (!has('Offer')) { await create(meridian, tid('Offer'), { buyer: meridian, seller, dealId: DEAL_ID, pricePerUnit: '35.0000', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
+
+    // The two DvP legs (real Holdings) + the allocation factory, so the close is an actual
+    // atomic swap on-ledger. Registry is admin/signatory of the holdings (sees both legs).
+    const registry = await ensureParty('Registry')
+    const operator = await ensureParty('AtriumApp')
+    const regAcs = await acsOf(registry)
+    const hasHolding = (inst: string) => regAcs.some((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === inst)
+    if (!hasHolding('USD-CASH')) { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'USD-CASH', amount: '4200000.0' }); did.push('Leg:cash') }
+    if (!hasHolding('HALDEN-EQUITY')) { await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' }); did.push('Leg:equity') }
+    if (!regAcs.some((c) => entityOf(c.templateId) === 'AllocationFactory')) { await create(registry, tid('AllocationFactory'), { admin: registry, users: [meridian, seller, operator] }); did.push('Factory') }
 
     res.json({ seeded: did.length > 0, created: did, seller: displayName(seller), buyers: [displayName(boranic), displayName(meridian)] })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }

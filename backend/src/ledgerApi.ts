@@ -63,14 +63,29 @@ async function headers(): Promise<Record<string, string>> {
 }
 
 async function api<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const init: RequestInit = {
     method: body === undefined ? 'GET' : method,
     headers: await headers(),
     body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await res.text()
-  if (!res.ok) throw new Error(`Ledger API ${path} → ${res.status}: ${text.slice(0, 400)}`)
-  return text ? (JSON.parse(text) as T) : (undefined as T)
+  }
+  // Hosted validators occasionally drop the TLS connection on a request (gateway resets) —
+  // `fetch failed` with no HTTP status. Retry transient network errors a few times so a live
+  // multi-call flow (e.g. the settle) doesn't fail mid-way. HTTP errors are NOT retried.
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${BASE}${path}`, init)
+      const text = await res.text()
+      if (!res.ok) throw new Error(`Ledger API ${path} → ${res.status}: ${text.slice(0, 400)}`)
+      return text ? (JSON.parse(text) as T) : (undefined as T)
+    } catch (e) {
+      // Only retry network-level failures (TypeError from fetch), not Ledger API HTTP errors.
+      if (!(e instanceof TypeError)) throw e
+      lastErr = e
+      await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
+    }
+  }
+  throw new Error(`Ledger API ${path} failed after retries: ${(lastErr as Error)?.message ?? lastErr}`)
 }
 
 export type CreatedEvent = {

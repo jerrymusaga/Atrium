@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
@@ -25,16 +25,32 @@ export default function App() {
   const [inviteTier, setInviteTier] = useState(1)
   const [bid, setBid] = useState('')
 
+  // Cache every lens's view so flipping is INSTANT even against a live (latent) validator —
+  // show the cached projection immediately, then refresh it in the background.
+  const viewCache = useRef<Record<string, DealView>>({})
+
   async function refreshViewers() {
     const vs = await client.listViewers()
     setViewers(vs)
     setViewer((v) => v || vs[0]?.party || '')
+    // Warm the cache for all lenses in parallel so the privacy flip is snappy on first try.
+    void Promise.all(vs.map(async (v) => {
+      try { viewCache.current[v.party] = await client.getDealView(v.party) } catch { /* ignore */ }
+    }))
     return vs
   }
   useEffect(() => { refreshViewers() }, [])
 
-  async function load() {
-    if (viewer) setView(await client.getDealView(viewer))
+  // Re-fetch the current lens (and refresh its cache). Pass invalidate=true after a mutation
+  // to drop stale cached projections so every lens reflects the new ledger state.
+  async function load(invalidate = false) {
+    if (!viewer) return
+    if (invalidate) viewCache.current = {}
+    const cached = viewCache.current[viewer]
+    if (cached) setView(cached) // instant paint from cache
+    const fresh = await client.getDealView(viewer)
+    viewCache.current[viewer] = fresh
+    setView(fresh)
   }
   useEffect(() => {
     load()
@@ -58,7 +74,7 @@ export default function App() {
     try {
       await client.submitOffer(viewer, Number(bid))
       setBid('')
-      await load()
+      await load(true)
     } catch (e) { setMsg((e as Error).message) }
   }
 
@@ -68,7 +84,7 @@ export default function App() {
     try {
       await client.recordAccess(viewer, docId)
       setOpened((o) => ({ ...o, [docId]: true }))
-      await load()
+      await load(true)
     } catch (e) {
       setMsg((e as Error).message)
     }
@@ -85,7 +101,7 @@ export default function App() {
     setRollback(null)
     try {
       await client.settle(viewer)
-      await load()
+      await load(true)
     } catch (e) {
       setMsg((e as Error).message)
     } finally {
@@ -102,7 +118,7 @@ export default function App() {
       await client.attemptBrokenClose(viewer)
     } catch (e) {
       setRollback((e as Error).message)
-      await load() // re-read: every balance is exactly as before
+      await load(true) // re-read: every balance is exactly as before
     } finally {
       setSettling(false)
     }
