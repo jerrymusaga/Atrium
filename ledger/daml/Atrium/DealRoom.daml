@@ -14,7 +14,7 @@
 module Atrium.DealRoom where
 
 import Daml.Script
-import DA.Time (hours, addRelTime)
+import DA.Time (hours, days, addRelTime)
 import DA.Assert ((===))
 import DA.Optional (isSome)
 
@@ -75,6 +75,28 @@ template AccessEvent
     observer buyer
     -- Production: add an optional Regulator observer for supervisory visibility.
 
+-- A KYC/KYB attestation issued by an independent provider. The institutional gate: a
+-- buyer cannot be settled with unless a current attestation names them. Signatory is the
+-- provider (unforgeable); the subject and the relying party (the seller/operator) observe
+-- it so the relying party can verify it on-ledger at the close — without ever seeing the
+-- underlying KYC documents (those stay with the provider, off-ledger).
+template KYCAttestation
+  with
+    kycProvider : Party
+    subject : Party        -- the verified party (a buyer)
+    relyingParty : Party   -- who may rely on this attestation (the seller / deal operator)
+    level : Text           -- e.g. "KYB-INSTITUTIONAL", "KYC-RETAIL"
+    jurisdiction : Text    -- e.g. "US", "EU"
+    issuedAt : Time
+    expiresAt : Time
+  where
+    signatory kycProvider
+    observer subject, relyingParty
+
+    choice RevokeAttestation : ()
+      controller kycProvider
+      do pure ()
+
 template Offer
   with
     buyer : Party
@@ -87,12 +109,24 @@ template Offer
     signatory buyer
     observer seller    -- visible to seller only; rival buyers never see it
 
-    -- Accepting marks the winning offer. The close itself (payment vs ownership,
-    -- atomic) is orchestrated by the executor app against Atrium.Dvp, fetching
-    -- choice contexts from the token registries. Kept as the trigger point here.
+    -- Accepting marks the winning offer. It REQUIRES a current KYC attestation naming the
+    -- bidder — no settlement with an unverified counterparty. The close itself (payment vs
+    -- ownership, atomic) is then orchestrated by the executor app against Atrium.Dvp.
+    -- kycCid is Optional so the choice stays smart-contract-upgrade compatible (Canton 3.x
+    -- requires added choice fields to be Optional); None is rejected at runtime — KYC is required.
     choice Accept : ()
+      with kycCid : Optional (ContractId KYCAttestation)
       controller seller
-      do pure ()
+      do
+        cid <- case kycCid of
+          Some c -> pure c
+          None -> abort "a KYC attestation is required to accept"
+        kyc <- fetch cid
+        assertMsg "KYC attestation must name this bidder as subject" (kyc.subject == buyer)
+        assertMsg "KYC attestation must name the seller as relying party" (kyc.relyingParty == seller)
+        now <- getTime
+        assertMsg "KYC attestation has expired" (now <= kyc.expiresAt)
+        pure ()
 
     choice WithdrawOffer : ()
       controller buyer
@@ -105,8 +139,13 @@ setupDemo = script do
   seller <- allocateParty "Halden"      -- the seller (Halden Robotics)
   buyerA <- allocateParty "Boranic"     -- strategic acquirer, tier 1 only
   buyerB <- allocateParty "Meridian"    -- friendly fund, tier 1 + 2
+  kyc    <- allocateParty "KYCProvider" -- independent KYC/KYB attestor
   now <- getTime
   let dealId = "HALDEN-2026-A"
+
+  -- Both buyers are KYC/KYB-cleared by the provider, relying party = the seller.
+  _ <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerA, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
+  _ <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
 
   _ <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Robotics — 12% secondary", instrument = "HALDEN-EQUITY", quantity = 120000.0)
   _ <- submit seller do createCmd (Document with seller, dealId, docId = "teaser",     title = "Investment teaser",    tier = 1, contentHash = "sha256:aa11", blobPointer = "s3://atrium/halden/teaser.enc")
@@ -162,5 +201,36 @@ testPrivacyProjection = script do
   assertMsg "buyer must see their own access event" (isSome evForB)
   evForSeller <- queryContractId seller evCid
   assertMsg "seller must see the access event" (isSome evForSeller)
+
+  pure ()
+
+-- Proof: the compliance gate. A bid can only be accepted with a current KYC attestation
+-- naming the bidder — and a wrong-subject or expired attestation is rejected. This is the
+-- institutional line: no settlement with an unverified counterparty.
+testKYCGate : Script ()
+testKYCGate = script do
+  seller <- allocateParty "Halden"
+  buyerB <- allocateParty "Meridian"
+  rival  <- allocateParty "Boranic"
+  kyc    <- allocateParty "KYCProvider"
+  now <- getTime
+  let dealId = "HALDEN-2026-A"
+
+  offer <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = now)
+
+  -- No attestation at all (None) is rejected — KYC is required.
+  submitMustFail seller do exerciseCmd offer (Accept with kycCid = None)
+
+  -- An attestation for the WRONG subject cannot be used to accept buyerB's bid.
+  wrongAtt <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = rival, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
+  submitMustFail seller do exerciseCmd offer (Accept with kycCid = Some wrongAtt)
+
+  -- An EXPIRED attestation for the right subject is rejected.
+  expiredAtt <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = addRelTime now (days (-400)), expiresAt = addRelTime now (days (-1)))
+  submitMustFail seller do exerciseCmd offer (Accept with kycCid = Some expiredAtt)
+
+  -- A current attestation naming buyerB clears the close.
+  goodAtt <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
+  submit seller do exerciseCmd offer (Accept with kycCid = Some goodAtt)
 
   pure ()

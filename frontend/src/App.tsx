@@ -253,16 +253,28 @@ export default function App() {
               {view?.settled ? '● Settled atomically' : '○ Not settled'}
             </span>
           </div>
+          {current.role === 'buyer' && (
+            <p className="panel-note kyc-line">
+              {view?.kyc
+                ? <>Your compliance status: <span className="kyc-badge ok">✓ {view.kyc.level} · {view.kyc.jurisdiction}</span> — the seller can settle with you.</>
+                : <>Your compliance status: <span className="kyc-badge pending">KYC pending</span> — the seller cannot settle until you're verified.</>}
+            </p>
+          )}
 
           <ul className="offers">
             {view?.offers.map((o) => (
               <li key={o.offerId} className={`offer status-${o.status}`}>
                 <div>
-                  <div className="o-buyer">{o.buyerLabel}</div>
+                  <div className="o-buyer">
+                    {o.buyerLabel}
+                    {o.kyc
+                      ? <span className="kyc-badge ok" title={`${o.kyc.level} · ${o.kyc.jurisdiction}`}>✓ KYC</span>
+                      : <span className="kyc-badge pending">KYC pending</span>}
+                  </div>
                   <div className="o-terms mono">{money(o.pricePerUnit)}/unit · {o.quantity.toLocaleString()} units · {money(o.pricePerUnit * o.quantity)}</div>
                 </div>
                 {current.role === 'seller' && o.status === 'open' && !view?.settled && (
-                  <button className="btn" onClick={() => accept(o.offerId)}>Accept</button>
+                  <button className="btn" disabled={!o.kyc} title={o.kyc ? '' : 'Bidder must be KYC-cleared'} onClick={() => accept(o.offerId)}>Accept</button>
                 )}
                 {o.status === 'accepted' && <span className="o-flag mono">ACCEPTED</span>}
               </li>

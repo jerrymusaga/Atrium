@@ -39,6 +39,13 @@ const docs: RawDoc[] = [
 // buyer -> max tier they may access
 const grants: Record<PartyId, number> = { [BUYER_A]: 1, [BUYER_B]: 2 }
 
+// buyer -> current KYC/KYB attestation (issued by an independent provider). The compliance
+// gate: an offer can only be accepted from a KYC-cleared bidder.
+const kyc: Record<PartyId, { level: string; jurisdiction: string }> = {
+  [BUYER_A]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' },
+  [BUYER_B]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' },
+}
+
 let accessTrail: AccessEvent[] = [
   { buyer: BUYER_A, buyerLabel: 'Boranic', docId: 'teaser', docTitle: 'Investment teaser', accessedAt: '09:14' },
   { buyer: BUYER_B, buyerLabel: 'Meridian', docId: 'teaser', docTitle: 'Investment teaser', accessedAt: '09:31' },
@@ -90,6 +97,7 @@ export const mockClient: LedgerClient = {
     await wait(150)
     const t = tier >= 2 ? 2 : 1
     grants[name] = t
+    kyc[name] = { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' } // cleared on onboarding
     const reg = VIEWERS.filter((v) => v.role === 'regulator')
     const rest = VIEWERS.filter((v) => v.role !== 'regulator')
     VIEWERS = [...rest, { party: name, label: `${name} (Buyer · ${tierLabel(t)})`, role: 'buyer' }, ...reg]
@@ -128,14 +136,15 @@ export const mockClient: LedgerClient = {
 
     // Offers: seller sees all; regulator sees them (supervisory); a buyer sees only
     // their own bid, never a rival's.
-    const visibleOffers = isSeller || isRegulator ? offers : offers.filter((o) => o.buyer === viewer)
+    const visibleOffers = (isSeller || isRegulator ? offers : offers.filter((o) => o.buyer === viewer))
+      .map((o) => ({ ...o, kyc: kyc[o.buyer] ?? null }))
 
     // Balances: a party sees holdings they own; seller/regulator see both sides.
     const allHoldings = holdings()
     const visibleHoldings =
       isSeller || isRegulator ? allHoldings : allHoldings.filter((h) => h.owner === viewer)
 
-    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, settled }
+    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null }
   },
 
   async recordAccess(viewer: PartyId, docId: string) {

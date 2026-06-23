@@ -151,7 +151,11 @@ body {
   border: 1px solid var(--line); border-radius: 10px; padding: 13px 16px; background: var(--slate);
 }
 .offer.status-accepted { border-color: var(--settled); }
-.o-buyer { font-weight: 500; font-size: 14px; }
+.o-buyer { font-weight: 500; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.kyc-badge { font-family: var(--mono); font-size: 10px; letter-spacing: 0.5px; padding: 2px 7px; border-radius: 20px; border: 1px solid var(--line); white-space: nowrap; }
+.kyc-badge.ok { color: var(--settled); border-color: var(--steel-dim); }
+.kyc-badge.pending { color: var(--seal); border-color: var(--seal); }
+.kyc-line { margin-top: 4px; }
 .o-terms { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .o-flag { color: var(--settled); font-size: 11px; letter-spacing: 1px; }
 

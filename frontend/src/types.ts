@@ -33,6 +33,8 @@ export type AccessEvent = {
   accessedAt: string
 }
 
+export type KYC = { level: string; jurisdiction: string }
+
 export type Offer = {
   offerId: string
   buyer: PartyId
@@ -41,6 +43,7 @@ export type Offer = {
   quantity: number
   submittedAt: string
   status: 'open' | 'accepted' | 'withdrawn'
+  kyc?: KYC | null // current KYC/KYB attestation for the bidder, if any
 }
 
 export type Holding = {
@@ -57,6 +60,7 @@ export type DealView = {
   offers: Offer[] // only the offers this viewer is entitled to see
   holdings: Holding[] // balances this viewer can see
   settled: boolean
+  kyc?: KYC | null // the viewing buyer's own KYC/KYB clearance (null for seller/regulator)
 }
 
 // What a regulator (scoped choice-observer on the close) can attest to: that the

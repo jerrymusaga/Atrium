@@ -99,6 +99,14 @@ async function ensureParty(logical: string): Promise<string> {
 const num = (s: any) => Number(s)
 const labelFor = displayName
 
+// Active contracts for a party, scoped to OUR package version. On a shared validator the
+// seller may also hold contracts from older package ids (prior demos); the app operates only
+// on the current package so views and the seed stay clean.
+async function acsOf(party: string): Promise<CreatedEvent[]> {
+  const all = await activeContracts(party)
+  return PKG ? all.filter((c) => c.templateId.startsWith(PKG + ':')) : all
+}
+
 // --- party-scoped read: the same deal, projected per party by the ledger itself ---
 
 app.get('/deals/:dealId/view', async (req, res) => {
@@ -109,13 +117,13 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const party = await partyId(prefix)
     const isSeller = prefix === SELLER
 
-    const mine = await activeContracts(party) // what THIS party may see — ledger-scoped
+    const mine = await acsOf(party) // what THIS party may see — ledger-scoped
     const byEntity = (e: string) => mine.filter((c) => entityOf(c.templateId) === e)
 
     // Shared deal context (index of the room). Documents/Deal are seller-signatory, so the
     // executor reads the manifest as the seller; CONTENTS/hash access stay gated below.
     const seller = await partyId(SELLER)
-    const sellerView = isSeller ? mine : await activeContracts(seller)
+    const sellerView = isSeller ? mine : await acsOf(seller)
     const dealC = sellerView.find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
     const docManifest = sellerView.filter((c) => entityOf(c.templateId) === 'Document').map((c) => c.createArgument)
 
@@ -134,9 +142,15 @@ app.get('/deals/:dealId/view', async (req, res) => {
       const doc = docManifest.find((d: any) => d.docId === a.docId)
       return { buyer: a.buyer, buyerLabel: labelFor(a.buyer), docId: a.docId, docTitle: doc?.title ?? a.docId, accessedAt: String(a.accessedAt).slice(11, 16) }
     })
+    // KYC/KYB attestations (provider-signed; relying party = seller, so they're in the seller
+    // view). A bid is "cleared" only with a current attestation naming the bidder.
+    const atts = sellerView.filter((c) => entityOf(c.templateId) === 'KYCAttestation').map((c) => c.createArgument)
+    const attFor = (full: string) => atts.find((a) => a.subject === full && Date.parse(a.expiresAt) > Date.now())
+    const kycOf = (full: string) => { const a = attFor(full); return a ? { level: a.level, jurisdiction: a.jurisdiction } : null }
+
     const offers = byEntity('Offer').map((c) => {
       const o = c.createArgument
-      return { offerId: c.contractId, buyer: o.buyer, buyerLabel: labelFor(o.buyer), pricePerUnit: num(o.pricePerUnit), quantity: num(o.quantity), submittedAt: String(o.submittedAt).slice(11, 16), status: 'open' as const }
+      return { offerId: c.contractId, buyer: o.buyer, buyerLabel: labelFor(o.buyer), pricePerUnit: num(o.pricePerUnit), quantity: num(o.quantity), submittedAt: String(o.submittedAt).slice(11, 16), status: 'open' as const, kyc: kycOf(o.buyer) }
     })
     const holdings = byEntity('Holding').map((c) => {
       const h = c.createArgument
@@ -146,6 +160,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
     res.json({
       deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity) } : null,
       documents, accessTrail, offers, holdings, settled: false,
+      kyc: isSeller ? null : kycOf(party), // the viewing buyer's own clearance
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -157,7 +172,7 @@ app.post('/deals/:dealId/access', async (req, res) => {
     const { party: prefix, docId } = req.body ?? {}
     if (!prefix || !docId) return res.status(400).json({ error: 'party and docId required' })
     const party = await partyId(prefix)
-    const mine = await activeContracts(party)
+    const mine = await acsOf(party)
     const grant = mine.find((c) => entityOf(c.templateId) === 'AccessGrant')
     if (!grant) return res.status(403).json({ error: 'No access grant for this party' })
     await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId })
@@ -172,9 +187,15 @@ app.post('/deals/:dealId/accept', async (req, res) => {
     const { party: prefix, offerId } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller accepts offers' })
     const seller = await partyId(SELLER)
-    const offer = (await activeContracts(seller)).find((c) => c.contractId === offerId)
+    const acs = await acsOf(seller)
+    const offer = acs.find((c) => c.contractId === offerId)
     if (!offer) return res.status(404).json({ error: 'Offer not visible / not found' })
-    await exercise(seller, offer.templateId, offer.contractId, 'Accept', {})
+    // Compliance gate: a current KYC attestation must name the bidder, or the close is refused.
+    const att = acs.find((c) => entityOf(c.templateId) === 'KYCAttestation'
+      && c.createArgument.subject === offer.createArgument.buyer
+      && Date.parse(c.createArgument.expiresAt) > Date.now())
+    if (!att) return res.status(403).json({ error: 'Bidder is not KYC-cleared — cannot accept' })
+    await exercise(seller, offer.templateId, offer.contractId, 'Accept', { kycCid: att.contractId })
     res.json({ accepted: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -229,7 +250,7 @@ app.get('/viewers', async (_req, res) => {
   try {
     await ensurePkg()
     const seller = await partyId(SELLER)
-    const grants = (await activeContracts(seller)).filter((c) => entityOf(c.templateId) === 'AccessGrant')
+    const grants = (await acsOf(seller)).filter((c) => entityOf(c.templateId) === 'AccessGrant')
     const seen = new Set<string>()
     const buyers = grants
       .map((c) => ({ name: labelFor(c.createArgument.buyer), tier: num(c.createArgument.maxTier) }))
@@ -274,7 +295,7 @@ app.post('/deals/:dealId/offer', async (req, res) => {
     if (!(price > 0)) return res.status(400).json({ error: 'pricePerUnit must be > 0' })
     const buyer = await partyId(prefix)
     const seller = await partyId(SELLER)
-    const dealC = (await activeContracts(seller)).find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    const dealC = (await acsOf(seller)).find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
     const quantity = dealC ? String(dealC.quantity) : '120000.0'
     await create(buyer, tid('Offer'), { buyer, seller, dealId: DEAL_ID, pricePerUnit: price.toFixed(4), quantity, submittedAt: new Date().toISOString() })
     res.json({ submitted: true })
@@ -290,12 +311,14 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     const seller = await ensureParty(SELLER)
     const boranic = await ensureParty('Boranic')
     const meridian = await ensureParty('Meridian')
+    const kycp = await ensureParty('KYCProvider')
     const now = new Date().toISOString()
+    const oneYear = new Date(Date.now() + 365 * 24 * 3600_000).toISOString()
     const did: string[] = []
 
     // Idempotent: inspect what already exists for the seller and create only what's missing,
     // so a half-run (e.g. interrupted) converges on re-run without duplicating.
-    const acs = await activeContracts(seller)
+    const acs = await acsOf(seller)
     const has = (e: string, pred: (a: any) => boolean = () => true) =>
       acs.some((c) => entityOf(c.templateId) === e && pred(c.createArgument))
     const grantFor = (full: string) => acs.find((c) => entityOf(c.templateId) === 'AccessGrant' && c.createArgument.buyer === full)
@@ -315,6 +338,8 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
       await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'financials' })
       did.push('AccessEvents')
     }
+    if (!has('KYCAttestation', (a) => a.subject === boranic)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
+    if (!has('KYCAttestation', (a) => a.subject === meridian)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: meridian, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Meridian') }
     if (!has('Offer')) { await create(meridian, tid('Offer'), { buyer: meridian, seller, dealId: DEAL_ID, pricePerUnit: '35.0000', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
 
     res.json({ seeded: did.length > 0, created: did, seller: displayName(seller), buyers: [displayName(boranic), displayName(meridian)] })
