@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
-import type { CloseAttestation, DealView, DocContent, Viewer } from './types'
+import type { AskResult, CloseAttestation, DealView, DocContent, Viewer } from './types'
 
 // VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
 const LIVE = import.meta.env.VITE_LIVE === '1'
@@ -19,6 +19,9 @@ export default function App() {
   const [opened, setOpened] = useState<Record<string, boolean>>({})
   const [doc, setDoc] = useState<DocContent | null>(null)
   const [opening, setOpening] = useState<string | null>(null)
+  const [question, setQuestion] = useState('')
+  const [asking, setAsking] = useState(false)
+  const [answer, setAnswer] = useState<AskResult | null>(null)
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [rollback, setRollback] = useState<string | null>(null)
@@ -135,6 +138,19 @@ export default function App() {
     setAttestation(await client.attestClose(viewer))
   }
 
+  async function ask() {
+    if (!question.trim()) return
+    setAsking(true)
+    setAnswer(null)
+    try {
+      setAnswer(await client.ask(viewer, question))
+    } catch (e) {
+      setMsg((e as Error).message)
+    } finally {
+      setAsking(false)
+    }
+  }
+
   return (
     <div className="app">
       <aside className="rail">
@@ -165,7 +181,7 @@ export default function App() {
               <button
                 key={v.party}
                 className={`lens-opt ${v.party === viewer ? 'is-active' : ''} role-${v.role}`}
-                onClick={() => { setViewer(v.party); setMsg(null) }}
+                onClick={() => { setViewer(v.party); setMsg(null); setAnswer(null); setDoc(null) }}
               >
                 <span className="lens-dot" />
                 {v.label}
@@ -266,6 +282,38 @@ export default function App() {
             ))}
             {view?.accessTrail.length === 0 && <li className="empty">No accesses recorded yet.</li>}
           </ul>
+        </section>
+
+        {/* Diligence copilot — privacy-bounded AI */}
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Diligence copilot</h2>
+            <span className="count mono">Venice AI · tier-bounded</span>
+          </div>
+          <p className="panel-note">
+            Ask about the deal. The copilot is given <strong>only the documents your grant authorizes</strong> —
+            it can't answer about a tier you can't decrypt, because it never receives those bytes.
+          </p>
+          <div className="ask-row">
+            <input
+              className="field"
+              placeholder={current.role === 'seller' ? 'e.g. summarize the deal and the financials' : 'e.g. what was FY2025 EBITDA?'}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') ask() }}
+            />
+            <button className="btn solid" disabled={asking || !question.trim()} onClick={ask}>
+              {asking ? 'Thinking…' : 'Ask'}
+            </button>
+          </div>
+          {answer && (
+            <div className="answer">
+              <div className="answer-body">{answer.answer}</div>
+              <div className="answer-foot mono">
+                🔒 copilot was shown: {answer.authorizedDocs.length ? answer.authorizedDocs.join(' · ') : 'no documents'} ({answer.tier})
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Offers + close */}

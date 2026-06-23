@@ -1,4 +1,4 @@
-import type { CloseAttestation, DealView, DocContent, Viewer } from '../types'
+import type { AskResult, CloseAttestation, DealView, DocContent, Viewer } from '../types'
 
 // The seam between UI and ledger. The mock implements this entirely in-browser.
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
@@ -18,6 +18,9 @@ export interface LedgerClient {
   // if the ledger confirms the viewer's grant covers the tier (else it throws "Sealed…"). An
   // authorized open also appends an AccessEvent — the audit trail logs every real decryption.
   openDocument(viewer: PartyId, docId: string): Promise<DocContent>
+  // Ask the diligence copilot. It only receives the documents this viewer's grant authorizes,
+  // so it cannot answer about a higher tier they can't see.
+  ask(viewer: PartyId, question: string): Promise<AskResult>
   // Seller accepts a winning offer.
   acceptOffer(viewer: PartyId, offerId: string): Promise<void>
   // Executor settles payment-vs-ownership atomically. Returns when balances have flipped.

@@ -38,6 +38,9 @@ export type KYC = { level: string; jurisdiction: string }
 // Decrypted document content, returned only when the ledger authorized the key release.
 export type DocContent = { docId: string; title: string; tier: number; hash: string; bytes: number; content: string }
 
+// A diligence-copilot answer. `authorizedDocs` is exactly what the model was allowed to read.
+export type AskResult = { answer: string; authorizedDocs: string[]; tier: string }
+
 export type Offer = {
   offerId: string
   buyer: PartyId

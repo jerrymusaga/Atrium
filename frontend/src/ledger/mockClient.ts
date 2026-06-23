@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, Viewer } from '../types'
+import type { AccessEvent, AskResult, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -168,6 +168,19 @@ export const mockClient: LedgerClient = {
       accessTrail = [...accessTrail, { buyer: viewer, buyerLabel: label, docId, docTitle: doc.title, accessedAt: stamp }]
     }
     return { docId, title: doc.title, tier: doc.tier, hash: doc.contentHash, bytes: doc.content.length, content: doc.content }
+  },
+
+  // Offline copilot stand-in (the live backend uses Venice AI). Still demonstrates the key point:
+  // it can only answer from the tiers this party is granted.
+  async ask(viewer: PartyId, question: string): Promise<AskResult> {
+    await wait(500)
+    const tier = viewer === SELLER ? 99 : grants[viewer] ?? 0
+    const authorized = docs.filter((d) => tier >= d.tier)
+    const wantsTier2 = /ebitda|revenue|margin|valuation|cash|backlog|financ|profit/i.test(question)
+    const answer = wantsTier2 && tier < 2
+      ? `The audited financials — revenue, EBITDA, margins, valuation — are in the Tier 2 documents. Your access grant covers Tier ${tier}, so the copilot was not given those documents and cannot answer. Request tier-2 access from the seller.`
+      : `(offline copilot) Based on the ${authorized.length} document(s) your grant authorizes: ${authorized.map((d) => d.title).join(', ')}. ${tier >= 2 ? 'FY2025 revenue was $41.8M (+68% YoY) with $6.9M adj. EBITDA; the 120,000-share stake is offered at $35.00 (~$4.2M).' : 'Halden Robotics is a warehouse-automation company; the teaser covers growth and the stake on offer. Deeper figures are gated to tier 2.'}`
+    return { answer, authorizedDocs: authorized.map((d) => d.title), tier: viewer === SELLER ? 'all tiers' : `tier ${tier}` }
   },
 
   async acceptOffer(viewer: PartyId, offerId: string) {

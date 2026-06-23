@@ -224,6 +224,13 @@ body {
 .verified-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .verified-note code { font-family: var(--mono); font-size: 11px; color: var(--steel); background: var(--raised); padding: 1px 5px; border-radius: 4px; margin: 0 1px; }
 
+/* ---- Diligence copilot ---- */
+.ask-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.ask-row .field { flex: 1; }
+.answer { border: 1px solid var(--steel-dim); border-radius: 12px; background: var(--slate); overflow: hidden; }
+.answer-body { padding: 16px 18px; font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-wrap; }
+.answer-foot { padding: 10px 18px; font-size: 11px; color: var(--settled); border-top: 1px solid var(--line); background: var(--ink); }
+
 /* ---- Document modal (decrypted content) ---- */
 .doc-modal-backdrop { position: fixed; inset: 0; background: rgba(5,7,11,.72); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 20; animation: fade .15s ease; }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }

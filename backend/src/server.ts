@@ -14,6 +14,7 @@ import {
   activeContracts, allocatePartyByHint, create, entityOf, exercise, grantActAs, listParties, USER_ID, type CreatedEvent,
 } from './ledgerApi.js'
 import { decryptDocument, docMeta, seedVault } from './vault.js'
+import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
 app.use(express.json())
@@ -194,6 +195,41 @@ app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
       if (grant) await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId }) // log the decryption on-ledger
     }
     res.json({ docId, title: meta.title, tier: meta.tier, hash: meta.hash, bytes: meta.bytes, content: decryptDocument(docId) })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- the diligence copilot: privacy-bounded AI ---
+// The model receives ONLY the documents this party's on-ledger grant authorizes (same gate as
+// the key service). So it can't answer about a tier the caller can't see — it never gets those
+// bytes. Privacy is enforced at retrieval, not by asking the model to behave.
+const DOC_IDS = ['teaser', 'financials']
+app.post('/deals/:dealId/ask', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, question } = req.body ?? {}
+    if (!prefix || !question) return res.status(400).json({ error: 'party and question required' })
+    if (!veniceConfigured()) return res.status(503).json({ error: 'Copilot offline — set VENICE_API_KEY in backend/.env' })
+
+    const isSeller = prefix === SELLER
+    let tier = 99
+    if (!isSeller) {
+      const party = await partyId(prefix)
+      const grant = (await acsOf(party)).find((c) => entityOf(c.templateId) === 'AccessGrant')
+      tier = grant ? num(grant.createArgument.maxTier) : 0
+    }
+    // Gather ONLY the authorized documents — exactly what the ledger would release keys for.
+    const authorized = DOC_IDS.map((id) => ({ id, meta: docMeta(id) })).filter((d) => d.meta && tier >= d.meta.tier)
+    const context = authorized.map((d) => `### ${d.meta!.title} (Tier ${d.meta!.tier})\n${decryptDocument(d.id)}`).join('\n\n')
+
+    const system = `You are the diligence copilot inside Atrium, a private M&A data room on Canton Network.
+You are answering for the party "${prefix}". You may ONLY use the documents below — they are EXACTLY what this party's on-ledger access grant authorizes. Do not use outside knowledge and never invent figures.
+If the question needs information that is not in these documents (it lives in a higher access tier this party was not granted), say so plainly: state which tier it likely sits in and that their grant does not cover it. Be concise and cite the specific figures you use.
+
+AUTHORIZED DOCUMENTS:
+${context || '(none — this party has no document access)'}`
+
+    const answer = await chat(system, String(question))
+    res.json({ answer, authorizedDocs: authorized.map((d) => d.meta!.title), tier: isSeller ? 'all tiers' : `tier ${tier}` })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
