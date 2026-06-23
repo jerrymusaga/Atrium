@@ -29,11 +29,14 @@ between takes resets the close to pre-settle. (The in-browser mock, `make fronte
 fallback only — do not lead with it.)
 
 1. **Hook (0:00–0:15)** — title card + the pitch's first two sentences. Land "the room itself settles."
-2. **The privacy money shot (0:15–0:55)** — flip the lens:
+2. **The privacy money shot (0:15–1:00)** — flip the lens:
+   - **Meridian (tier 2):** **Open the audited financials** → the modal decrypts and shows the real
+     numbers; note the footer: *"AES-256-GCM · key released because the ledger confirms your tier-2 grant."*
+   - **Boranic (tier 1):** try the financials → **cryptographically denied** — *"the key service will not
+     release the key."* The rival's bid is also **gone** from its view.
    - **Halden (seller):** sees everything — both docs, the bid, the full access trail.
-   - **Boranic (tier 1):** financials **sealed**, the rival's bid **gone**, only its own activity.
-   - **Meridian (tier 2):** both docs, its own bid.
-   - Say: *"Same deal. Three realities. Selective disclosure — enforced by the ledger, not by us."*
+   - Say: *"Same deal, three realities. The documents are encrypted off-ledger; Canton decides who gets the
+     key. A tier-1 buyer can't decrypt tier-2 — not by UI, by cryptography. And every open is logged on-ledger."*
 3. **Onboard + bid (0:55–1:15)** — as seller, **Invite a buyer**; switch to that buyer, **submit a bid**.
    Shows it's dynamic, not hard-coded.
 4. **The close (1:15–1:45)** — as seller, note the **✓ KYC** badge (Accept is disabled without it),
