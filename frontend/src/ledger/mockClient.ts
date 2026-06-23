@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, CloseAttestation, Deal, DealView, Document, Holding, Offer, Viewer } from '../types'
+import type { AccessEvent, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -30,10 +30,16 @@ const deal: Deal = {
   quantity: 120000,
 }
 
-type RawDoc = { docId: string; title: string; tier: number; contentHash: string }
+type RawDoc = { docId: string; title: string; tier: number; contentHash: string; content: string }
 const docs: RawDoc[] = [
-  { docId: 'teaser', title: 'Investment teaser', tier: 1, contentHash: 'sha256:aa11' },
-  { docId: 'financials', title: 'Audited financials', tier: 2, contentHash: 'sha256:bb22' },
+  {
+    docId: 'teaser', title: 'Investment teaser', tier: 1, contentHash: 'sha256:b52e8f7e1d344718',
+    content: `HALDEN ROBOTICS — INVESTMENT TEASER (Tier 1)\n\nProject Halden — 12% secondary sale of Halden Robotics, a warehouse-automation company.\nFounded 2019 · Oslo & Austin · 140 FTE. Category: autonomous mobile robots for 3PL.\n\n• 3-year revenue CAGR ~70%; gross margin expanding with the Gen-3 fleet.\n• Blue-chip logistics customers; multi-year contracted backlog.\n• Stake on offer: 120,000 shares (~12% fully diluted).\n\nAudited financials and the cap table are in Tier 2, for verified deep-diligence buyers.`,
+  },
+  {
+    docId: 'financials', title: 'Audited financials', tier: 2, contentHash: 'sha256:6add8e4565209a06',
+    content: `HALDEN ROBOTICS — AUDITED FINANCIALS (Tier 2 · CONFIDENTIAL)\n\nFY2025 (audited, USD)\n  Revenue                 41,800,000\n  YoY growth                    +68%\n  Gross profit            24,300,000   (58.1% margin)\n  Adj. EBITDA              6,900,000   (16.5% margin)\n  Net cash                12,400,000\n  Contracted backlog      57,000,000\n\nImplied valuation at the offered terms\n  Price / share                35.00\n  Stake (120,000 sh)       4,200,000\n  Implied equity value    35,000,000   (~0.84x FY25 revenue)\n\nIf you can read this, the key service released your AES-256-GCM key —\nwhich it only does because the ledger confirms your grant covers Tier 2.`,
+  },
 ]
 
 // buyer -> max tier they may access
@@ -147,14 +153,21 @@ export const mockClient: LedgerClient = {
     return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null }
   },
 
-  async recordAccess(viewer: PartyId, docId: string) {
-    await wait(80)
+  async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {
+    await wait(120)
+    const isSeller = viewer === SELLER
     const maxTier = grants[viewer] ?? 0
     const doc = docs.find((d) => d.docId === docId)
-    if (!doc || maxTier < doc.tier) throw new Error('Sealed — not in your tier')
-    const label = viewer === BUYER_A ? 'Boranic' : viewer === BUYER_B ? 'Meridian' : viewer
-    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    accessTrail = [...accessTrail, { buyer: viewer, buyerLabel: label, docId, docTitle: doc.title, accessedAt: stamp }]
+    if (!doc) throw new Error('unknown document')
+    if (!isSeller && maxTier < doc.tier) {
+      throw new Error(`Sealed. Your grant covers tier ${maxTier}; "${doc.title}" is tier ${doc.tier}. The key service will not release the key.`)
+    }
+    if (!isSeller) {
+      const label = viewer === BUYER_A ? 'Boranic' : viewer === BUYER_B ? 'Meridian' : viewer
+      const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      accessTrail = [...accessTrail, { buyer: viewer, buyerLabel: label, docId, docTitle: doc.title, accessedAt: stamp }]
+    }
+    return { docId, title: doc.title, tier: doc.tier, hash: doc.contentHash, bytes: doc.content.length, content: doc.content }
   },
 
   async acceptOffer(viewer: PartyId, offerId: string) {

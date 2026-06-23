@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
-import type { CloseAttestation, DealView, Viewer } from './types'
+import type { CloseAttestation, DealView, DocContent, Viewer } from './types'
 
 // VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
 const LIVE = import.meta.env.VITE_LIVE === '1'
@@ -17,6 +17,8 @@ export default function App() {
   const [viewer, setViewer] = useState<string>('')
   const [view, setView] = useState<DealView | null>(null)
   const [opened, setOpened] = useState<Record<string, boolean>>({})
+  const [doc, setDoc] = useState<DocContent | null>(null)
+  const [opening, setOpening] = useState<string | null>(null)
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [rollback, setRollback] = useState<string | null>(null)
@@ -81,12 +83,17 @@ export default function App() {
   if (!current) return <div className="app booting">Loading the deal room…</div>
 
   async function openDoc(docId: string) {
+    setOpening(docId)
+    setMsg(null)
     try {
-      await client.recordAccess(viewer, docId)
+      const content = await client.openDocument(viewer, docId) // key released only if the ledger authorizes
+      setDoc(content)
       setOpened((o) => ({ ...o, [docId]: true }))
-      await load(true)
+      await load(true) // the access trail just grew on-ledger
     } catch (e) {
       setMsg((e as Error).message)
+    } finally {
+      setOpening(null)
     }
   }
 
@@ -220,8 +227,8 @@ export default function App() {
                 {d.accessible ? (
                   <>
                     <h3 className="doc-title">{d.title}</h3>
-                    <button className="btn ghost" onClick={() => openDoc(d.docId)}>
-                      {opened[d.docId] ? 'Logged — view again' : 'Open document'}
+                    <button className="btn ghost" disabled={opening === d.docId} onClick={() => openDoc(d.docId)}>
+                      {opening === d.docId ? 'Releasing key…' : opened[d.docId] ? 'Open again' : 'Open document'}
                     </button>
                   </>
                 ) : (
@@ -388,6 +395,25 @@ export default function App() {
             <code>testPrivacyProjection</code>, <code>testAtomicDvP</code>, <code>testAtomicityHolds</code>.
           </span>
         </footer>
+
+        {doc && (
+          <div className="doc-modal-backdrop" onClick={() => setDoc(null)}>
+            <div className="doc-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="doc-modal-head">
+                <div>
+                  <div className="eyebrow">Tier {doc.tier} · decrypted off-ledger</div>
+                  <h3>{doc.title}</h3>
+                </div>
+                <button className="btn ghost" onClick={() => setDoc(null)}>Close</button>
+              </div>
+              <pre className="doc-content">{doc.content}</pre>
+              <div className="doc-modal-foot mono">
+                🔓 AES-256-GCM · {doc.bytes} bytes ciphertext · {doc.hash.slice(0, 23)}… — the key service
+                released this because the ledger confirms your grant covers tier {doc.tier}.
+              </div>
+            </div>
+          </div>
+        )}
 
         {msg && <div className="toast" onClick={() => setMsg(null)}>{msg}</div>}
       </main>

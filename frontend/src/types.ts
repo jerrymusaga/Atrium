@@ -35,6 +35,9 @@ export type AccessEvent = {
 
 export type KYC = { level: string; jurisdiction: string }
 
+// Decrypted document content, returned only when the ledger authorized the key release.
+export type DocContent = { docId: string; title: string; tier: number; hash: string; bytes: number; content: string }
+
 export type Offer = {
   offerId: string
   buyer: PartyId

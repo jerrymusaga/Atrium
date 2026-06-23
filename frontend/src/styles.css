@@ -224,6 +224,15 @@ body {
 .verified-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .verified-note code { font-family: var(--mono); font-size: 11px; color: var(--steel); background: var(--raised); padding: 1px 5px; border-radius: 4px; margin: 0 1px; }
 
+/* ---- Document modal (decrypted content) ---- */
+.doc-modal-backdrop { position: fixed; inset: 0; background: rgba(5,7,11,.72); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 20; animation: fade .15s ease; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.doc-modal { background: var(--slate); border: 1px solid var(--steel-dim); border-radius: 14px; max-width: 620px; width: 100%; max-height: 82vh; display: flex; flex-direction: column; box-shadow: 0 24px 64px rgba(0,0,0,.5); }
+.doc-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 12px; }
+.doc-modal-head h3 { font-family: var(--display); font-weight: 600; font-size: 19px; margin: 4px 0 0; }
+.doc-content { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: var(--text); background: var(--ink); border: 1px solid var(--line); border-radius: 10px; margin: 0 22px; padding: 16px; overflow: auto; white-space: pre-wrap; }
+.doc-modal-foot { color: var(--settled); font-size: 11px; line-height: 1.6; padding: 14px 22px 20px; }
+
 /* ---- Toast ---- */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--seal); color: #1a1206; padding: 11px 18px; border-radius: 10px; font-size: 13px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 

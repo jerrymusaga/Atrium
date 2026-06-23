@@ -13,9 +13,11 @@ import express from 'express'
 import {
   activeContracts, allocatePartyByHint, create, entityOf, exercise, grantActAs, listParties, USER_ID, type CreatedEvent,
 } from './ledgerApi.js'
+import { decryptDocument, docMeta, seedVault } from './vault.js'
 
 const app = express()
 app.use(express.json())
+seedVault() // encrypt the demo documents at startup; keys are held by this key service
 
 // readable demo handles → resolved at request time to full party ids on the ledger
 const SELLER = 'Halden'
@@ -132,7 +134,8 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const maxTier = isSeller ? 99 : (myGrant ? num(myGrant.maxTier) : 0)
 
     const documents = docManifest.map((d: any) => ({
-      docId: d.docId, title: d.title, tier: num(d.tier), contentHash: d.contentHash,
+      docId: d.docId, title: d.title, tier: num(d.tier),
+      contentHash: docMeta(d.docId)?.hash ?? d.contentHash, // the real ciphertext hash from the vault
       accessible: isSeller || maxTier >= num(d.tier),
     }))
 
@@ -168,18 +171,29 @@ app.get('/deals/:dealId/view', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- buyer opens a document → RecordAccess (appends an immutable AccessEvent) ---
-app.post('/deals/:dealId/access', async (req, res) => {
+// --- open a document: the KEY-RELEASE GATE ---
+// The key service releases the decryption key (and returns the plaintext) ONLY if the ledger
+// confirms the requester's AccessGrant covers the document's tier. Authorized opens append an
+// immutable AccessEvent — so the audit trail logs every actual decryption. The bytes are decrypted
+// off-ledger; Canton only ever held the hash + pointer + grant.
+app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
   try {
     await ensurePkg()
-    const { party: prefix, docId } = req.body ?? {}
-    if (!prefix || !docId) return res.status(400).json({ error: 'party and docId required' })
-    const party = await partyId(prefix)
-    const mine = await acsOf(party)
-    const grant = mine.find((c) => entityOf(c.templateId) === 'AccessGrant')
-    if (!grant) return res.status(403).json({ error: 'No access grant for this party' })
-    await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId })
-    res.json({ recorded: true })
+    const docId = String(req.params.docId)
+    const prefix = String(req.query.party ?? '')
+    const meta = docMeta(docId)
+    if (!meta) return res.status(404).json({ error: 'unknown document' })
+
+    if (prefix !== SELLER) {
+      const party = await partyId(prefix)
+      const grant = (await acsOf(party)).find((c) => entityOf(c.templateId) === 'AccessGrant')
+      const tier = grant ? num(grant.createArgument.maxTier) : 0
+      if (tier < meta.tier) {
+        return res.status(403).json({ error: `Sealed. Your grant covers tier ${tier}; "${meta.title}" is tier ${meta.tier}. The key service will not release the key.`, sealed: true, tier: meta.tier })
+      }
+      if (grant) await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId }) // log the decryption on-ledger
+    }
+    res.json({ docId, title: meta.title, tier: meta.tier, hash: meta.hash, bytes: meta.bytes, content: decryptDocument(docId) })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
