@@ -217,6 +217,17 @@ body {
 .btn.solid:disabled { opacity: .6; cursor: progress; }
 .btn.wide { width: 100%; padding: 13px; }
 
+/* ---- Cap table ---- */
+.captable { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
+.captable li { display: grid; grid-template-columns: 96px 1fr 48px 84px; align-items: center; gap: 12px; font-size: 13px; }
+.ct-holder { color: var(--text); font-weight: 500; }
+.ct-bar { height: 10px; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.ct-fill { display: block; height: 100%; background: var(--steel-dim); transition: width .6s ease, background .3s; }
+.captable li.is-new .ct-fill { background: var(--settled); }
+.captable li.is-new .ct-holder { color: #6fd0b3; }
+.ct-pct { color: var(--text); text-align: right; }
+.ct-shares { color: var(--muted); text-align: right; font-size: 12px; }
+
 /* ---- Verified footer ---- */
 .verified { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .mode-pill { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 4px 10px; white-space: nowrap; }

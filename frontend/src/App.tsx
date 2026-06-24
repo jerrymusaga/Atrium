@@ -436,6 +436,32 @@ export default function App() {
           </div>
         </section>
 
+        {view?.capTable && view.capTable.length > 0 && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Cap table</h2>
+              <span className="count mono">{current.role === 'seller' || current.role === 'regulator' ? 'Halden Robotics · share registry' : 'your position'}</span>
+            </div>
+            <ul className="captable">
+              {view.capTable.map((r, i) => (
+                <li key={i} className={view.settled && (r.holderLabel === 'Meridian' || r.holderLabel === 'Boranic') ? 'is-new' : ''}>
+                  <span className="ct-holder">{r.holderLabel}</span>
+                  <span className="ct-bar"><span className="ct-fill" style={{ width: `${r.pct}%` }} /></span>
+                  <span className="ct-pct mono">{r.pct}%</span>
+                  <span className="ct-shares mono">{r.shares.toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="panel-note">
+              {view.settled
+                ? 'Ownership transferred on settlement — the share registry now reflects the new holder.'
+                : current.role === 'seller'
+                  ? 'The 120,000-share (12%) stake on offer transfers to the buyer the instant the deal closes.'
+                  : 'Your tokenized ownership will appear here once the seller settles the deal.'}
+            </p>
+          </section>
+        )}
+
         <footer className="verified">
           <span className={`mode-pill ${LIVE ? 'live' : ''}`}>{LIVE ? '● LIVE on Canton' : '○ in-browser mock'}</span>
           <span className="verified-note">

@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, AskResult, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, Viewer } from '../types'
+import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -85,6 +85,22 @@ function holdings(): Holding[] {
   ]
 }
 
+// Halden Robotics cap table: 1,000,000 shares. The 120,000-share (12%) stake on offer is held by
+// the seller until the close, then by the winning buyer. Seller/regulator see all; a buyer sees only their line.
+const TOTAL_SHARES = 1000000
+function capTableFor(viewer: PartyId, privileged: boolean): CapTableRow[] {
+  const stakeHolder = settled ? acceptedOffer?.buyerLabel ?? 'Meridian' : 'Halden'
+  const rows: CapTableRow[] = [
+    { holderLabel: 'Founders', shares: 600000, pct: 60 },
+    { holderLabel: 'ESOP', shares: 280000, pct: 28 },
+    { holderLabel: stakeHolder, shares: 120000, pct: 12 },
+  ]
+  void TOTAL_SHARES
+  if (privileged) return rows
+  const myLabel = viewer === BUYER_A ? 'Boranic' : viewer === BUYER_B ? 'Meridian' : viewer
+  return rows.filter((r) => r.holderLabel === myLabel)
+}
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export const mockClient: LedgerClient = {
@@ -150,7 +166,7 @@ export const mockClient: LedgerClient = {
     const visibleHoldings =
       isSeller || isRegulator ? allHoldings : allHoldings.filter((h) => h.owner === viewer)
 
-    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null }
+    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, capTable: capTableFor(viewer, isSeller || isRegulator), settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null }
   },
 
   async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {

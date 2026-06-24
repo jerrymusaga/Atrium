@@ -51,9 +51,10 @@ const GRANT_ACT_AS = process.env.LEDGER_GRANT_ACT_AS === '1'
 // a freshly-seeded hosted ledger); otherwise learn it from any on-ledger contract.
 let PKG: string | null = process.env.ATRIUM_PKG ?? null
 const DVP_ENTITIES = new Set(['Holding', 'Allocation', 'AllocationFactory', 'SettlementCoordinator'])
+const EQUITY_ENTITIES = new Set(['ShareCertificate'])
 function tid(entity: string): string {
   if (!PKG) throw new Error('package id not resolved yet')
-  const mod = DVP_ENTITIES.has(entity) ? 'Dvp' : 'DealRoom'
+  const mod = DVP_ENTITIES.has(entity) ? 'Dvp' : EQUITY_ENTITIES.has(entity) ? 'Equity' : 'DealRoom'
   return `${PKG}:Atrium.${mod}:${entity}`
 }
 async function ensurePkg(): Promise<void> {
@@ -160,13 +161,22 @@ app.get('/deals/:dealId/view', async (req, res) => {
     // so the close panel shows both sides; `settled` is derived from on-ledger ownership: once
     // the cash leg is owned by the seller, the atomic swap has happened.
     const registry = await partyId('Registry')
-    const regHoldings = (await acsOf(registry)).filter((c) => entityOf(c.templateId) === 'Holding').map((c) => c.createArgument)
+    const regAcs = await acsOf(registry)
+    const regHoldings = regAcs.filter((c) => entityOf(c.templateId) === 'Holding').map((c) => c.createArgument)
     const holdings = regHoldings.map((h: any) => ({ owner: h.owner, ownerLabel: labelFor(h.owner), instrument: h.instrument, amount: num(h.amount) }))
     const settled = regHoldings.some((h: any) => h.instrument === 'USD-CASH' && labelFor(h.owner) === SELLER)
 
+    // The cap table (share registry). Seller/regulator see the whole table; a buyer sees only
+    // their own line — the registry is itself privacy-scoped. After the close, the buyer's 12%
+    // appears because the on-offer stake transferred on settlement.
+    const certs = regAcs.filter((c) => entityOf(c.templateId) === 'ShareCertificate').map((c) => c.createArgument)
+    const totalShares = certs.reduce((s, c: any) => s + num(c.shares), 0) || 1
+    const capRow = (c: any) => ({ holderLabel: labelFor(c.holder), shares: num(c.shares), pct: Math.round((num(c.shares) / totalShares) * 1000) / 10 })
+    const capTable = (isSeller ? certs : certs.filter((c: any) => c.holder === party)).map(capRow).sort((a, b) => b.shares - a.shares)
+
     res.json({
       deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity) } : null,
-      documents, accessTrail, offers, holdings, settled,
+      documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party), // the viewing buyer's own clearance
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
@@ -290,6 +300,10 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     }
 
     await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
+    // The share registry reflects the new owner: transfer the on-offer stake to the buyer so the
+    // cap table updates (seller's 12% → buyer).
+    const stake = regAcs.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === seller && c.createArgument.instrument === 'HALDEN-EQUITY')
+    if (stake) await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: buyer })
     res.json({ settled: true, atomic: true, settlementRef: ref, cashToSeller: 4200000, equityToBuyer: 120000 })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -302,11 +316,15 @@ app.post('/deals/:dealId/reset-close', async (_req, res) => {
     const registry = await partyId('Registry')
     const seller = await partyId(SELLER)
     const buyer = await partyId('Meridian')
-    for (const c of (await acsOf(registry)).filter((x) => entityOf(x.templateId) === 'Holding')) {
+    const reg = await acsOf(registry)
+    for (const c of reg.filter((x) => entityOf(x.templateId) === 'Holding')) {
       await exercise(registry, c.templateId, c.contractId, 'Archive', {})
     }
     await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'USD-CASH', amount: '4200000.0' })
     await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
+    // Restore the cap table: move the stake certificate back from the buyer to the seller.
+    const stake = reg.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === buyer && c.createArgument.instrument === 'HALDEN-EQUITY')
+    if (stake) await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: seller })
     res.json({ reset: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -425,6 +443,15 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     if (!hasHolding('USD-CASH')) { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'USD-CASH', amount: '4200000.0' }); did.push('Leg:cash') }
     if (!hasHolding('HALDEN-EQUITY')) { await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' }); did.push('Leg:equity') }
     if (!regAcs.some((c) => entityOf(c.templateId) === 'AllocationFactory')) { await create(registry, tid('AllocationFactory'), { admin: registry, users: [meridian, seller, operator] }); did.push('Factory') }
+
+    // The cap table (share registry): Halden Robotics' 1,000,000 shares. The seller holds the
+    // 120,000-share (12%) stake on offer; the close transfers it to the buyer.
+    const founders = await ensureParty('Founders')
+    const esop = await ensureParty('ESOP')
+    const hasCert = (holder: string) => regAcs.some((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === holder)
+    if (!hasCert(founders)) { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: founders, instrument: 'HALDEN-EQUITY', shares: '600000.0' }); did.push('Cap:Founders') }
+    if (!hasCert(esop)) { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: esop, instrument: 'HALDEN-EQUITY', shares: '280000.0' }); did.push('Cap:ESOP') }
+    if (!hasCert(seller)) { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: seller, instrument: 'HALDEN-EQUITY', shares: '120000.0' }); did.push('Cap:Halden(stake)') }
 
     res.json({ seeded: did.length > 0, created: did, seller: displayName(seller), buyers: [displayName(boranic), displayName(meridian)] })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }

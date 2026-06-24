@@ -1,0 +1,52 @@
+-- Atrium.Equity
+--
+-- The tokenized ownership leg + the share registry (cap table). A `ShareCertificate` is a
+-- position on the cap table, issued by the company's registrar (transfer agent). The secondary
+-- sale transfers the on-offer stake to the buyer at the close — so the cap table reflects the
+-- new owner the instant the deal settles. This is the RWA half: real tokenized ownership, not a
+-- mock number. In Stage 3 the cash leg becomes Amulet; this stays the bespoke delivery leg.
+
+module Atrium.Equity where
+
+import Daml.Script
+import DA.Assert ((===))
+
+template ShareCertificate
+  with
+    registrar : Party     -- the company's share registrar / transfer agent
+    holder : Party
+    instrument : Text      -- e.g. "HALDEN-EQUITY"
+    shares : Decimal
+  where
+    signatory registrar
+    observer holder
+
+    -- Registrar-controlled transfer: archives this certificate and issues a new one to the new
+    -- holder. The close exercises this for the on-offer stake, moving it seller -> buyer.
+    choice Transfer : ContractId ShareCertificate
+      with newHolder : Party
+      controller registrar
+      do create this with holder = newHolder
+
+-- Proof: a registrar transfer moves the stake to the new holder; only the registrar may do it,
+-- and the share count is conserved.
+testShareTransfer : Script ()
+testShareTransfer = script do
+  registrar <- allocateParty "Registry"
+  seller    <- allocateParty "Halden"
+  buyer     <- allocateParty "Meridian"
+
+  cert <- submit registrar do createCmd (ShareCertificate with registrar, holder = seller, instrument = "HALDEN-EQUITY", shares = 120000.0)
+
+  -- a non-registrar cannot transfer
+  submitMustFail seller do exerciseCmd cert (Transfer with newHolder = buyer)
+
+  -- the registrar transfers the stake to the buyer
+  newCert <- submit registrar do exerciseCmd cert (Transfer with newHolder = buyer)
+  Some c <- queryContractId buyer newCert
+  c.holder === buyer
+  c.shares === 120000.0
+  -- the seller no longer holds the old certificate
+  oldForSeller <- queryContractId seller cert
+  oldForSeller === None
+  pure ()

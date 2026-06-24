@@ -59,12 +59,16 @@ export type Holding = {
   amount: number
 }
 
+// A line on the cap table (share registry). Seller/regulator see all lines; a buyer sees only theirs.
+export type CapTableRow = { holderLabel: string; shares: number; pct: number }
+
 export type DealView = {
   deal: Deal
   documents: Document[]
   accessTrail: AccessEvent[] // only the events this viewer is entitled to see
   offers: Offer[] // only the offers this viewer is entitled to see
   holdings: Holding[] // balances this viewer can see
+  capTable?: CapTableRow[] // share registry — full for seller/regulator, own-line only for a buyer
   settled: boolean
   kyc?: KYC | null // the viewing buyer's own KYC/KYB clearance (null for seller/regulator)
 }
