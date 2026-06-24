@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
+import { Landing } from './Landing'
 import type { AskResult, CloseAttestation, DealView, DocContent, Viewer } from './types'
 
 // VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
@@ -22,6 +23,7 @@ export default function App() {
   const [question, setQuestion] = useState('')
   const [asking, setAsking] = useState(false)
   const [answer, setAnswer] = useState<AskResult | null>(null)
+  const [entered, setEntered] = useState(false)
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [rollback, setRollback] = useState<string | null>(null)
@@ -83,6 +85,7 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) }
   }
 
+  if (!entered) return <Landing onEnter={() => setEntered(true)} live={LIVE} />
   if (!current) return <div className="app booting">Loading the deal room…</div>
 
   async function openDoc(docId: string) {
@@ -154,7 +157,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="rail">
-        <div className="brand">
+        <div className="brand" role="button" title="Back to overview" onClick={() => setEntered(false)}>
           <AtriumMark className="mark" />
           <div>
             <div className="brand-name">ATRIUM</div>
