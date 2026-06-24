@@ -14,6 +14,22 @@ const PILLARS = [
   { k: 'Atomic, compliant close', d: 'KYC-gated delivery-vs-payment: cash and tokenized ownership swap in one transaction, or not at all — and the cap table updates the instant it settles.' },
 ]
 
+const FLOW: [string, string, string][] = [
+  ['01', 'Invite & KYC', 'Seller onboards a buyer; an independent provider attests their KYC/KYB on-ledger.'],
+  ['02', 'Tiered diligence', 'Buyers open only the documents their tier can decrypt — every access is logged.'],
+  ['03', 'Sealed bids', 'Buyers bid privately; rival bidders never see each other.'],
+  ['04', 'Compliant accept', 'The seller accepts a bid — only if the bidder is currently KYC-cleared.'],
+  ['05', 'Atomic close', 'Cash and tokenized ownership swap in one transaction, or not at all.'],
+  ['06', 'Cap table updates', 'The share registry reflects the new owner the instant it settles.'],
+]
+
+const PROOF: [string, string][] = [
+  ['LIVE', 'on a hosted Canton validator'],
+  ['5', 'ledger-verified proofs'],
+  ['AES-256', 'documents encrypted off-chain'],
+  ['1 tx', 'atomic delivery-vs-payment'],
+]
+
 // Reveal-on-scroll: adds `.in` to [data-reveal] elements as they enter the viewport.
 function useReveal<T extends HTMLElement>() {
   const ref = useRef<T>(null)
@@ -22,7 +38,7 @@ function useReveal<T extends HTMLElement>() {
     if (!root) return
     const io = new IntersectionObserver(
       (entries) => entries.forEach((e) => e.isIntersecting && e.target.classList.add('in')),
-      { threshold: 0.18 },
+      { threshold: 0.15 },
     )
     root.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el))
     return () => io.disconnect()
@@ -98,6 +114,31 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
         </div>
       </section>
 
+      {/* Three core capabilities */}
+      <section className="lp-pillars">
+        {PILLARS.map((p, i) => (
+          <div key={p.k} className="lp-card" data-reveal style={{ transitionDelay: `${i * 90}ms` }}>
+            <div className="lp-card-num mono">0{i + 1}</div>
+            <h3>{p.k}</h3>
+            <p>{p.d}</p>
+          </div>
+        ))}
+      </section>
+
+      {/* The lifecycle — diligence to close */}
+      <section className="lp-flow" data-reveal>
+        <div className="lp-eyebrow mono">ONE CONTINUOUS FLOW — DILIGENCE TO CLOSE</div>
+        <div className="flow-steps">
+          {FLOW.map(([n, t, d], i) => (
+            <div key={n} className="flow-step" data-reveal style={{ transitionDelay: `${i * 70}ms` }}>
+              <div className="flow-num mono">{n}</div>
+              <h4>{t}</h4>
+              <p>{d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* The close — animated atomic swap */}
       <section className="lp-close" data-reveal>
         <div className="lp-close-head">
@@ -124,14 +165,43 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
         <p className="lp-close-note">Both legs settle together, or not at all — no escrow, no counterparty risk, no weeks of lawyers. <span className="swap-settled">✓ settled atomically</span></p>
       </section>
 
-      <section className="lp-pillars">
-        {PILLARS.map((p, i) => (
-          <div key={p.k} className="lp-card" data-reveal style={{ transitionDelay: `${i * 90}ms` }}>
-            <div className="lp-card-num mono">0{i + 1}</div>
-            <h3>{p.k}</h3>
-            <p>{p.d}</p>
+      {/* Audit trail + regulator */}
+      <section className="lp-split" data-reveal>
+        <div className="lp-panel">
+          <div className="lp-panel-h mono">TAMPER-PROOF AUDIT TRAIL</div>
+          <ul className="audit-log">
+            <li><span className="mono">09:14</span> Boranic opened <b>Investment teaser</b></li>
+            <li><span className="mono">09:31</span> Meridian opened <b>Investment teaser</b></li>
+            <li><span className="mono">10:02</span> Meridian opened <b>Audited financials</b></li>
+          </ul>
+          <p className="lp-panel-note">Every decryption is an immutable on-ledger event — who saw what, when. Provable, not assertable.</p>
+        </div>
+        <div className="lp-panel">
+          <div className="lp-panel-h mono">REGULATOR OVERSIGHT</div>
+          <div className="reg-badge">✓ Close verified against the recorded bid</div>
+          <p className="lp-panel-note">A scoped regulator confirms the settlement matched the winning bid — <b>without ever seeing the tier-2 documents</b>.</p>
+        </div>
+      </section>
+
+      {/* Compliance + tokenized cap table */}
+      <section className="lp-split" data-reveal>
+        <div className="lp-panel">
+          <div className="lp-panel-h mono">COMPLIANCE-GATED CLOSE</div>
+          <div className="kyc-chips">
+            <span className="kyc-chip">✓ KYB-INSTITUTIONAL · US</span>
+            <span className="kyc-chip">✓ KYB-INSTITUTIONAL · US</span>
           </div>
-        ))}
+          <p className="lp-panel-note">No settlement with an unverified counterparty. The atomic close is refused unless a current KYC/KYB attestation names the bidder.</p>
+        </div>
+        <div className="lp-panel">
+          <div className="lp-panel-h mono">TOKENIZED OWNERSHIP · CAP TABLE</div>
+          <ul className="mini-cap">
+            <li><span className="mc-who">Founders</span><span className="mc-bar"><i style={{ width: '60%' }} /></span><span className="mono mc-pct">60%</span></li>
+            <li><span className="mc-who">ESOP</span><span className="mc-bar"><i style={{ width: '28%' }} /></span><span className="mono mc-pct">28%</span></li>
+            <li className="is-new"><span className="mc-who">Buyer</span><span className="mc-bar"><i style={{ width: '12%' }} /></span><span className="mono mc-pct">12%</span></li>
+          </ul>
+          <p className="lp-panel-note">Ownership is a real on-ledger share certificate. The 12% stake moves to the buyer the instant the deal settles.</p>
+        </div>
       </section>
 
       <section className="lp-why" data-reveal>
@@ -145,13 +215,23 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
         </div>
       </section>
 
+      {/* Live + proven credibility band */}
+      <section className="lp-proof" data-reveal>
+        {PROOF.map(([n, l]) => (
+          <div key={l} className="proof-stat">
+            <div className="proof-n">{n}</div>
+            <div className="proof-l mono">{l}</div>
+          </div>
+        ))}
+      </section>
+
       <section className="lp-final" data-reveal>
         <h2>See the same deal, three ways.</h2>
         <button className="btn solid lp-enter" onClick={onEnter}>Enter the deal room →</button>
       </section>
 
       <footer className="lp-foot mono">
-        5 ledger-verified proofs · running live on a hosted Canton validator · documents encrypted off-chain
+        Documents encrypted off-chain · the gap to production (audit, legal wrapper, real registry) is named, not hidden.
       </footer>
     </div>
   )
