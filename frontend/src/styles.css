@@ -77,10 +77,10 @@ body {
 .dc-doc.is-sealed { border-color: var(--steel-dim); }
 .dc-doc-top { display: flex; justify-content: space-between; font-size: 10px; color: var(--steel); letter-spacing: 1px; margin-bottom: 10px; }
 .dc-muted { color: var(--muted); }
-.dc-lines { display: grid; gap: 6px; }
-.dc-lines i { height: 7px; border-radius: 3px; background: linear-gradient(90deg, var(--steel-dim), transparent); display: block; }
-.dc-lines i:first-child { width: 100%; }
-.dc-val { color: var(--settled); font-size: 11px; height: auto !important; background: none !important; margin-top: 3px; }
+.dc-title-row { font-family: var(--display); font-weight: 500; font-size: 14px; color: var(--text); margin-bottom: 8px; }
+.dc-open { color: var(--settled); }
+.dc-val { display: block; color: var(--settled); font-size: 11px; line-height: 1.55; }
+.dc-val.teaser { color: var(--steel); }
 .dc-redact { display: grid; gap: 6px; }
 .dc-redact i { height: 12px; border-radius: 2px; background: var(--redact); display: block; animation: seal .45s ease both; }
 .dc-redact i:first-child { width: 100%; }

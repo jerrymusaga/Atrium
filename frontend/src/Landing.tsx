@@ -75,16 +75,18 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
             </div>
 
             <div className="dc-doc">
-              <div className="dc-doc-top"><span className="mono">TIER 1</span><span className="mono dc-muted">teaser</span></div>
-              <div className="dc-lines"><i /><i /><i style={{ width: '58%' }} /></div>
+              <div className="dc-doc-top"><span className="mono">TIER 1</span><span className="mono dc-open">● open to all</span></div>
+              <div className="dc-title-row">Investment teaser</div>
+              <span className="dc-val teaser mono">Warehouse robotics · rev CAGR ~70% · 12% secondary on offer</span>
             </div>
 
             <div className={`dc-doc ${lens.sealed ? 'is-sealed' : ''}`}>
-              <div className="dc-doc-top"><span className="mono">TIER 2</span><span className="mono dc-muted">{lens.sealed ? '🔒 sealed' : 'financials'}</span></div>
+              <div className="dc-doc-top"><span className="mono">TIER 2</span><span className="mono dc-muted">{lens.sealed ? '🔒 sealed' : '● decrypted'}</span></div>
+              <div className="dc-title-row">Audited financials</div>
               {lens.sealed ? (
                 <div className="dc-redact"><i /><i /><i style={{ width: '64%' }} /></div>
               ) : (
-                <div className="dc-lines"><i /><i style={{ width: '82%' }} /><span className="dc-val mono">EBITDA $6.9M · rev $41.8M</span></div>
+                <span className="dc-val mono">EBITDA $6.9M · revenue $41.8M · 0.84× rev</span>
               )}
             </div>
 
