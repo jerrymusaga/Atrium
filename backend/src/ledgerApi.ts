@@ -1,85 +1,84 @@
 // Minimal client for the Canton JSON Ledger API v2 (the one `daml sandbox --json-api-port`
 // serves, and the same API LocalNet / Seaport hosted validators expose). Verified by hand
-// against both the sandbox and the Seaport devnet validator before wiring. Auth: none on the
-// local sandbox; a Bearer JWT (static or OIDC-exchanged) on hosted validators.
+// against both the sandbox and the Seaport devnet validator.
+//
+// CONNECTION-AWARE: every call takes an optional `Conn` (base URL + ledger user + auth). The
+// default connection comes from env and preserves the original single-validator behaviour. A
+// SECOND connection (a teammate's party on another validator, with THEIR own token) lets us read
+// and write as that real identity — the ledger, not our app, enforces what they can do. That's
+// the cross-validator, real-per-party-identity story (see docs/TOPOLOGY.md).
 import './env.js' // must run first: loads backend/.env before the config consts below
 
-const BASE = process.env.LEDGER_API_URL ?? 'http://localhost:7575'
-export const USER_ID = process.env.LEDGER_USER_ID ?? 'participant_admin'
-
-// Auth, in order of precedence:
-//   1. LEDGER_TOKEN          — a static Bearer JWT (sandbox needs none; paste one to test fast)
-//   2. OIDC client-credentials — OIDC_TOKEN_URL (or OIDC_ISSUER for discovery) + CLIENT_ID/SECRET.
-//      This is the Seaport / hosted-validator path: the validator's JSON Ledger API v2 sits
-//      behind an OIDC issuer (Loop DevNet wallet). Tokens are fetched and cached until expiry.
-//   3. none                  — local `daml sandbox`.
-const STATIC_TOKEN = process.env.LEDGER_TOKEN ?? ''
-const OIDC = {
-  issuer: process.env.OIDC_ISSUER ?? '',
-  tokenUrl: process.env.OIDC_TOKEN_URL ?? '',
-  clientId: process.env.OIDC_CLIENT_ID ?? '',
-  clientSecret: process.env.OIDC_CLIENT_SECRET ?? '',
-  audience: process.env.OIDC_AUDIENCE ?? '',
-  scope: process.env.OIDC_SCOPE ?? '',
+export type Conn = {
+  baseUrl: string
+  userId: string
+  staticToken?: string
+  oidc?: { issuer?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; audience?: string; scope?: string }
+  _cache?: { value: string; expiresAt: number } // per-connection OIDC token cache
 }
 
-let cachedToken: { value: string; expiresAt: number } | null = null
+export function makeConn(cfg: Partial<Conn> & { baseUrl: string }): Conn {
+  return { userId: 'participant_admin', ...cfg }
+}
 
-async function resolveTokenUrl(): Promise<string> {
-  if (OIDC.tokenUrl) return OIDC.tokenUrl
-  // OpenID Connect discovery off the issuer.
-  const disc = await fetch(`${OIDC.issuer.replace(/\/$/, '')}/.well-known/openid-configuration`)
-  if (!disc.ok) throw new Error(`OIDC discovery failed (${disc.status}); set OIDC_TOKEN_URL explicitly`)
+// The default connection (the operator's validator), from env — unchanged behaviour.
+export const defaultConn: Conn = makeConn({
+  baseUrl: process.env.LEDGER_API_URL ?? 'http://localhost:7575',
+  userId: process.env.LEDGER_USER_ID ?? 'participant_admin',
+  staticToken: process.env.LEDGER_TOKEN || undefined,
+  oidc: {
+    issuer: process.env.OIDC_ISSUER, tokenUrl: process.env.OIDC_TOKEN_URL,
+    clientId: process.env.OIDC_CLIENT_ID, clientSecret: process.env.OIDC_CLIENT_SECRET,
+    audience: process.env.OIDC_AUDIENCE, scope: process.env.OIDC_SCOPE,
+  },
+})
+export const USER_ID = defaultConn.userId // kept for callers that display it
+
+// --- auth (per connection) ---
+
+async function resolveTokenUrl(o: NonNullable<Conn['oidc']>): Promise<string> {
+  if (o.tokenUrl) return o.tokenUrl
+  const disc = await fetch(`${(o.issuer ?? '').replace(/\/$/, '')}/.well-known/openid-configuration`)
+  if (!disc.ok) throw new Error(`OIDC discovery failed (${disc.status}); set the token URL explicitly`)
   const j = (await disc.json()) as { token_endpoint?: string }
   if (!j.token_endpoint) throw new Error('OIDC discovery returned no token_endpoint')
   return j.token_endpoint
 }
 
-async function fetchOidcToken(): Promise<string> {
-  const tokenUrl = await resolveTokenUrl()
-  const form = new URLSearchParams({ grant_type: 'client_credentials', client_id: OIDC.clientId, client_secret: OIDC.clientSecret })
-  if (OIDC.audience) form.set('audience', OIDC.audience)
-  if (OIDC.scope) form.set('scope', OIDC.scope)
+async function bearer(conn: Conn): Promise<string> {
+  if (conn.staticToken) return conn.staticToken
+  const o = conn.oidc
+  if (!o || !(o.issuer || o.tokenUrl)) return '' // local sandbox: no auth
+  if (conn._cache && conn._cache.expiresAt > Date.now()) return conn._cache.value
+  const tokenUrl = await resolveTokenUrl(o)
+  const form = new URLSearchParams({ grant_type: 'client_credentials', client_id: o.clientId ?? '', client_secret: o.clientSecret ?? '' })
+  if (o.audience) form.set('audience', o.audience)
+  if (o.scope) form.set('scope', o.scope)
   const res = await fetch(tokenUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form })
   const text = await res.text()
   if (!res.ok) throw new Error(`OIDC token request failed ${res.status}: ${text.slice(0, 300)}`)
   const j = JSON.parse(text) as { access_token: string; expires_in?: number }
-  cachedToken = { value: j.access_token, expiresAt: Date.now() + (j.expires_in ?? 300) * 1000 - 30_000 }
+  conn._cache = { value: j.access_token, expiresAt: Date.now() + (j.expires_in ?? 300) * 1000 - 30_000 }
   return j.access_token
 }
 
-async function bearer(): Promise<string> {
-  if (STATIC_TOKEN) return STATIC_TOKEN
-  if (!(OIDC.issuer || OIDC.tokenUrl)) return '' // local sandbox: no auth
-  if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.value
-  return fetchOidcToken()
-}
-
-async function headers(): Promise<Record<string, string>> {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  const tok = await bearer()
-  if (tok) h['Authorization'] = `Bearer ${tok}`
-  return h
-}
-
-async function api<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
+async function api<T>(conn: Conn, path: string, body?: unknown, method = 'POST'): Promise<T> {
+  const tok = await bearer(conn)
   const init: RequestInit = {
     method: body === undefined ? 'GET' : method,
-    headers: await headers(),
+    headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   }
   // Hosted validators occasionally drop the TLS connection on a request (gateway resets) —
-  // `fetch failed` with no HTTP status. Retry transient network errors a few times so a live
-  // multi-call flow (e.g. the settle) doesn't fail mid-way. HTTP errors are NOT retried.
+  // `fetch failed` with no HTTP status. Retry transient network errors; never retry HTTP errors.
   let lastErr: unknown
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(`${BASE}${path}`, init)
+      const res = await fetch(`${conn.baseUrl}${path}`, init)
       const text = await res.text()
       if (!res.ok) throw new Error(`Ledger API ${path} → ${res.status}: ${text.slice(0, 400)}`)
       return text ? (JSON.parse(text) as T) : (undefined as T)
     } catch (e) {
-      // Only retry network-level failures (TypeError from fetch), not Ledger API HTTP errors.
       if (!(e instanceof TypeError)) throw e
       lastErr = e
       await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
@@ -96,75 +95,62 @@ export type CreatedEvent = {
   signatories: string[]
 }
 
-// --- party + offset helpers ---
+// --- party + offset helpers (each takes an optional connection) ---
 
-export async function listParties(): Promise<string[]> {
-  const r = await api<{ partyDetails: { party: string }[] }>('/v2/parties', undefined)
+export async function listParties(conn: Conn = defaultConn): Promise<string[]> {
+  const r = await api<{ partyDetails: { party: string }[] }>(conn, '/v2/parties', undefined)
   return r.partyDetails.map((p) => p.party)
 }
 
-// Allocates a party from a readable hint; returns the full minted party id. Goes through the
-// shared auth path, so it works against the sandbox and an OIDC-protected hosted validator alike.
-export async function allocatePartyByHint(partyIdHint: string): Promise<string> {
-  const r = await api<{ partyDetails?: { party: string } }>('/v2/parties', { partyIdHint, identityProviderId: '' })
+export async function allocatePartyByHint(partyIdHint: string, conn: Conn = defaultConn): Promise<string> {
+  const r = await api<{ partyDetails?: { party: string } }>(conn, '/v2/parties', { partyIdHint, identityProviderId: '' })
   if (!r.partyDetails?.party) throw new Error(`party allocation returned no party for hint "${partyIdHint}"`)
   return r.partyDetails.party
 }
 
-// Grants the executor's ledger user (USER_ID) the right to act as `party`. On a hosted validator
-// the token authenticates as one user, which must hold CanActAs for every party we submit as.
-// Idempotent: re-granting an existing right is a no-op. (Sandbox doesn't need this — see server.)
-export async function grantActAs(party: string): Promise<void> {
-  await api(`/v2/users/${encodeURIComponent(USER_ID)}/rights`, {
-    userId: USER_ID,
+// Grants `conn`'s ledger user the right to act as `party`. On a hosted validator the token
+// authenticates as one user, which must hold CanActAs for every party it submits as. Idempotent.
+export async function grantActAs(party: string, conn: Conn = defaultConn): Promise<void> {
+  await api(conn, `/v2/users/${encodeURIComponent(conn.userId)}/rights`, {
+    userId: conn.userId,
     rights: [{ kind: { CanActAs: { value: { party } } } }],
   })
 }
 
-// Resolves the full party id (e.g. "Halden-d4d9::1220…") from the readable prefix the
-// demo uses ("Halden"). LocalNet/sandbox both mint a namespace suffix per party.
-export async function resolveParty(prefix: string): Promise<string> {
-  const all = await listParties()
+export async function resolveParty(prefix: string, conn: Conn = defaultConn): Promise<string> {
+  const all = await listParties(conn)
   const hit = all.find((p) => p.startsWith(prefix + '-') || p.startsWith(prefix + '::') || p === prefix)
-  if (!hit) throw new Error(`No party on the ledger starting with "${prefix}" (have: ${all.join(', ')})`)
+  if (!hit) throw new Error(`No party on the ledger starting with "${prefix}"`)
   return hit
 }
 
-async function ledgerEnd(): Promise<number> {
-  const r = await api<{ offset: number }>('/v2/state/ledger-end', undefined)
+async function ledgerEnd(conn: Conn): Promise<number> {
+  const r = await api<{ offset: number }>(conn, '/v2/state/ledger-end', undefined)
   return r.offset
 }
 
-// The active contract set AS SEEN BY `party`. The ledger scopes this to what `party` is
-// entitled to — selective disclosure is enforced here, not by us. That's the whole point.
-export async function activeContracts(party: string): Promise<CreatedEvent[]> {
-  const activeAtOffset = await ledgerEnd()
-  const rows = await api<any[]>('/v2/state/active-contracts', {
+// The active contract set AS SEEN BY `party` on `conn`'s validator. The ledger scopes this to
+// what `party` is entitled to — selective disclosure enforced by Canton, not by us.
+export async function activeContracts(party: string, conn: Conn = defaultConn): Promise<CreatedEvent[]> {
+  const activeAtOffset = await ledgerEnd(conn)
+  const rows = await api<any[]>(conn, '/v2/state/active-contracts', {
     filter: { filtersByParty: { [party]: { cumulative: [] } } },
     verbose: false,
     activeAtOffset,
   })
-  return rows
-    .map((r) => r?.contractEntry?.JsActiveContract?.createdEvent)
-    .filter(Boolean) as CreatedEvent[]
+  return rows.map((r) => r?.contractEntry?.JsActiveContract?.createdEvent).filter(Boolean) as CreatedEvent[]
 }
 
 export function entityOf(templateId: string): string {
   return templateId.split(':').pop() ?? templateId
 }
 
-// --- command submission ---
+// --- command submission (each takes an optional connection) ---
 
-export async function exercise(
-  actAs: string,
-  templateId: string,
-  contractId: string,
-  choice: string,
-  choiceArgument: Record<string, any>,
-): Promise<any> {
-  return api('/v2/commands/submit-and-wait-for-transaction', {
+export async function exercise(actAs: string, templateId: string, contractId: string, choice: string, choiceArgument: Record<string, any>, conn: Conn = defaultConn): Promise<any> {
+  return api(conn, '/v2/commands/submit-and-wait-for-transaction', {
     commands: {
-      userId: USER_ID,
+      userId: conn.userId,
       commandId: `atrium-${choice}-${Date.now()}`,
       actAs: [actAs],
       commands: [{ ExerciseCommand: { templateId, contractId, choice, choiceArgument } }],
@@ -172,14 +158,10 @@ export async function exercise(
   })
 }
 
-export async function create(
-  actAs: string,
-  templateId: string,
-  createArguments: Record<string, any>,
-): Promise<CreatedEvent> {
-  const r = await api<any>('/v2/commands/submit-and-wait-for-transaction', {
+export async function create(actAs: string, templateId: string, createArguments: Record<string, any>, conn: Conn = defaultConn): Promise<CreatedEvent> {
+  const r = await api<any>(conn, '/v2/commands/submit-and-wait-for-transaction', {
     commands: {
-      userId: USER_ID,
+      userId: conn.userId,
       commandId: `atrium-create-${Date.now()}`,
       actAs: [actAs],
       commands: [{ CreateCommand: { templateId, createArguments } }],

@@ -216,6 +216,8 @@ body {
 .lens-opt.role-buyer .lens-dot { background: var(--seal); }
 .lens-opt.role-regulator .lens-dot { background: var(--settled); }
 .lens-opt.is-active .lens-dot { box-shadow: 0 0 0 3px rgba(94, 143, 181, .2); }
+.lens-label { flex: 1; }
+.live-tag { font-family: var(--mono); font-size: 9px; letter-spacing: .5px; color: var(--settled); border: 1px solid var(--steel-dim); border-radius: 20px; padding: 2px 6px; flex: none; }
 .lens-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 14px 0 0; }
 
 /* ---- Invite a buyer (seller, in the rail) ---- */

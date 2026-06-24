@@ -187,7 +187,8 @@ export default function App() {
                 onClick={() => { setViewer(v.party); setMsg(null); setAnswer(null); setDoc(null) }}
               >
                 <span className="lens-dot" />
-                {v.label}
+                <span className="lens-label">{v.label}</span>
+                {v.live && <span className="live-tag" title="Real party on its own validator, acting with its own token">● live</span>}
               </button>
             ))}
           </div>

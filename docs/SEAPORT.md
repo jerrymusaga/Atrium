@@ -94,6 +94,28 @@ synchronizer (they do on the Seaport devnet — `global-domain::…`). Once vett
 `POST /deals/:id/invite {"buyerParty":"<their full party id>","tier":1}` routes cross-node, and the
 buyer sees their scoped projection from their own node.
 
+## Cross-validator REAL identity (the ledger-enforced auth proof)
+On the shared 5n validator there is only one machine token (ledger user "6") that can act as every
+party — so "who can do what" is enforced by our app, not the ledger. The genuine, cryptographic proof
+of per-party identity only exists **across validators**: a real party, on its own node, with its own
+token, that *cannot* act as the seller no matter what our app does.
+
+The executor is now **connection-aware** (`backend/src/ledgerApi.ts` — every call takes a `Conn` =
+base URL + ledger user + auth; the default is the operator's validator). Configure a second, real
+party via the `REMOTE_*` env (see `.env.example`):
+
+1. The teammate gets their **own party** on their validator (e.g. the Encode-org node) and a **token**
+   for it (Seaport session JWT, or their validator's OIDC client).
+2. Vet the **atrium DAR** on that validator (`docs/SEAPORT.md` → cross-node) and have the seller invite
+   that party: `POST /deals/:id/invite {"buyerParty":"<their full id>","tier":1}`.
+3. Set `REMOTE_PARTY` / `REMOTE_PARTY_LABEL` / `REMOTE_LEDGER_API_URL` / `REMOTE_LEDGER_TOKEN` (or the
+   `REMOTE_OIDC_*` client-credentials) and restart the backend.
+
+Then the new lens (shown with a **● live** badge) reads the buyer's projection **from their validator
+with their token** — they see only what the ledger discloses to them, and their token can't act as the
+seller. That's per-party identity enforced by Canton, demonstrated live. `GET /health` reports
+`remoteIdentity` when it's wired.
+
 ## Notes
 - Seaport also documents a TS client, `@c7/ledger`, for browser→ledger calls. Atrium keeps the **executor**
   in the middle (it holds the operator party and composes party-scoped views), so we use our own JSON v2 client

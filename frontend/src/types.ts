@@ -5,6 +5,7 @@ export type Viewer = {
   party: PartyId
   label: string
   role: 'seller' | 'buyer' | 'regulator'
+  live?: boolean // a real external party on its own validator, acting with its own token
 }
 
 export type Deal = {

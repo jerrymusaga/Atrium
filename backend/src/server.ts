@@ -11,7 +11,7 @@
 import './env.js' // load backend/.env first (mirrors ledgerApi; safe if already loaded)
 import express from 'express'
 import {
-  activeContracts, allocatePartyByHint, create, entityOf, exercise, grantActAs, listParties, USER_ID, type CreatedEvent,
+  activeContracts, allocatePartyByHint, create, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
 import { decryptDocument, docMeta, seedVault } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
@@ -46,6 +46,28 @@ function displayName(full: string): string {
 // Should the executor grant its ledger user CanActAs on parties it acts as? Needed on hosted
 // validators (the token is one user); the sandbox's admin user doesn't need it.
 const GRANT_ACT_AS = process.env.LEDGER_GRANT_ACT_AS === '1'
+
+// A REAL external party on ANOTHER validator (a teammate's Loop-wallet party), acting with ITS
+// OWN token. When this party views the deal we read from THEIR validator with THEIR credentials —
+// the ledger, not our app, enforces their identity. This is the cross-validator proof; until it's
+// configured the demo runs entirely on the operator's validator. See docs/SEAPORT.md.
+const REMOTE = (process.env.REMOTE_PARTY && process.env.REMOTE_LEDGER_API_URL)
+  ? {
+      label: process.env.REMOTE_PARTY_LABEL || 'Guest',
+      party: process.env.REMOTE_PARTY,
+      tier: Number(process.env.REMOTE_TIER || '1') >= 2 ? 2 : 1,
+      conn: makeConn({
+        baseUrl: process.env.REMOTE_LEDGER_API_URL,
+        userId: process.env.REMOTE_LEDGER_USER_ID || 'participant_admin',
+        staticToken: process.env.REMOTE_LEDGER_TOKEN || undefined,
+        oidc: {
+          tokenUrl: process.env.REMOTE_OIDC_TOKEN_URL, clientId: process.env.REMOTE_OIDC_CLIENT_ID,
+          clientSecret: process.env.REMOTE_OIDC_CLIENT_SECRET, audience: process.env.REMOTE_OIDC_AUDIENCE,
+          scope: process.env.REMOTE_OIDC_SCOPE,
+        },
+      }) as Conn,
+    }
+  : null
 
 // Package id of the atrium DAR. Prefer an explicit env (works before any contract exists, e.g.
 // a freshly-seeded hosted ledger); otherwise learn it from any on-ledger contract.
@@ -106,8 +128,8 @@ const labelFor = displayName
 // Active contracts for a party, scoped to OUR package version. On a shared validator the
 // seller may also hold contracts from older package ids (prior demos); the app operates only
 // on the current package so views and the seed stay clean.
-async function acsOf(party: string): Promise<CreatedEvent[]> {
-  const all = await activeContracts(party)
+async function acsOf(party: string, conn: Conn = defaultConn): Promise<CreatedEvent[]> {
+  const all = await activeContracts(party, conn)
   return PKG ? all.filter((c) => c.templateId.startsWith(PKG + ':')) : all
 }
 
@@ -118,10 +140,12 @@ app.get('/deals/:dealId/view', async (req, res) => {
     await ensurePkg()
     const prefix = String(req.query.party ?? '')
     if (!prefix) return res.status(400).json({ error: 'Pass ?party=Halden|Boranic|Meridian' })
-    const party = await partyId(prefix)
     const isSeller = prefix === SELLER
+    // A real external party reads its OWN projection from ITS OWN validator with ITS OWN token.
+    const remote = REMOTE && prefix === REMOTE.label ? REMOTE : null
+    const party = remote ? remote.party : await partyId(prefix)
 
-    const mine = await acsOf(party) // what THIS party may see — ledger-scoped
+    const mine = remote ? await acsOf(party, remote.conn) : await acsOf(party) // ledger-scoped to THIS party
     const byEntity = (e: string) => mine.filter((c) => entityOf(c.templateId) === e)
 
     // Shared deal context (index of the room). Documents/Deal are seller-signatory, so the
@@ -347,8 +371,12 @@ app.get('/viewers', async (_req, res) => {
     const buyers = grants
       .map((c) => ({ name: labelFor(c.createArgument.buyer), tier: num(c.createArgument.maxTier) }))
       .filter((b) => (seen.has(b.name) ? false : (seen.add(b.name), true)))
-      .map((b) => ({ party: b.name, label: `${b.name} (Buyer · ${b.tier >= 2 ? 'tier 1+2' : 'tier 1'})`, role: 'buyer' as const }))
-    res.json([{ party: SELLER, label: 'Halden (Seller)', role: 'seller' }, ...buyers])
+      .map((b) => ({ party: b.name, label: `${b.name} (Buyer · ${b.tier >= 2 ? 'tier 1+2' : 'tier 1'})`, role: 'buyer' as const, live: false }))
+    // A real external party on its own validator (acts with its own token) — flagged as a live identity.
+    const remoteLens = REMOTE && !buyers.some((b) => b.party === REMOTE.label)
+      ? [{ party: REMOTE.label, label: `${REMOTE.label} (Buyer · own validator)`, role: 'buyer' as const, live: true }]
+      : []
+    res.json([{ party: SELLER, label: 'Halden (Seller)', role: 'seller', live: false }, ...buyers, ...remoteLens])
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -465,6 +493,7 @@ app.get('/health', async (_req, res) => {
       ledgerApi: process.env.LEDGER_API_URL ?? 'http://localhost:7575',
       userId: USER_ID, partyPrefix: PARTY_PREFIX || '(none)', grantActAs: GRANT_ACT_AS, pkg: PKG ?? '(unresolved)',
       parties: parties.length,
+      remoteIdentity: REMOTE ? { label: REMOTE.label, validator: REMOTE.conn.baseUrl } : null,
     })
   } catch (e) { res.status(503).json({ ok: false, error: (e as Error).message }) }
 })
