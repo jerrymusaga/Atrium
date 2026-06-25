@@ -10,3 +10,6 @@ dist/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 ledger/log/
+
+# persisted encrypted document vault (ciphertext blobs)
+backend/vault/

@@ -13,12 +13,13 @@ import express from 'express'
 import {
   activeContracts, allocatePartyByHint, create, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
-import { decryptDocument, docMeta, registerDocument, seedVault } from './vault.js'
+import { decryptDocument, docMeta, loadVault, registerDocument, seedVault } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
 app.use(express.json())
-seedVault() // encrypt the demo documents at startup; keys are held by this key service
+loadVault() // restore previously-uploaded encrypted documents from disk…
+seedVault() // …then ensure the demo documents exist; keys are held by this key service
 
 // readable demo handles → resolved at request time to full party ids on the ledger
 const SELLER = 'Halden'

@@ -10,14 +10,46 @@
 // ciphertext sits in S3/IPFS, and the key service is a separate trust boundary from the operator.
 
 import { createCipheriv, createDecipheriv, createHash } from 'crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
+import { join } from 'path'
 
 const SECRET = process.env.VAULT_SECRET ?? 'atrium-demo-vault-secret'
+// The persisted ciphertext store (the "blob store"). Keys are NOT stored â€” they're derived from
+// the secret, so a restart restores the ciphertext and the key service re-derives the keys.
+const VAULT_DIR = process.env.VAULT_DIR ?? join(process.cwd(), 'vault')
 
 type Entry = { title: string; tier: number; iv: Buffer; key: Buffer; ciphertext: Buffer; tag: Buffer; hash: string }
 const store = new Map<string, Entry>()
 
 const keyFor = (docId: string) => createHash('sha256').update(`${SECRET}:${docId}`).digest() // 32 bytes
 const ivFor = (docId: string) => createHash('sha256').update(`iv:${docId}`).digest().subarray(0, 12)
+
+function persist(docId: string, e: Entry) {
+  try {
+    if (!existsSync(VAULT_DIR)) mkdirSync(VAULT_DIR, { recursive: true })
+    writeFileSync(join(VAULT_DIR, `${docId}.json`), JSON.stringify({
+      title: e.title, tier: e.tier, iv: e.iv.toString('hex'), tag: e.tag.toString('hex'),
+      ciphertext: e.ciphertext.toString('base64'), hash: e.hash,
+    }))
+  } catch { /* best-effort; the vault still works in-memory this session */ }
+}
+
+// Restore persisted ciphertext on startup; keys are re-derived, never stored on disk.
+export function loadVault() {
+  try {
+    if (!existsSync(VAULT_DIR)) return
+    for (const f of readdirSync(VAULT_DIR)) {
+      if (!f.endsWith('.json')) continue
+      const docId = f.slice(0, -5)
+      const j = JSON.parse(readFileSync(join(VAULT_DIR, f), 'utf8'))
+      store.set(docId, {
+        title: j.title, tier: Number(j.tier), iv: Buffer.from(j.iv, 'hex'),
+        key: keyFor(docId), ciphertext: Buffer.from(j.ciphertext, 'base64'),
+        tag: Buffer.from(j.tag, 'hex'), hash: j.hash,
+      })
+    }
+  } catch { /* ignore a corrupt/empty vault dir */ }
+}
 
 export function registerDocument(docId: string, title: string, tier: number, plaintext: string) {
   const key = keyFor(docId)
@@ -26,7 +58,9 @@ export function registerDocument(docId: string, title: string, tier: number, pla
   const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
   const hash = 'sha256:' + createHash('sha256').update(Buffer.concat([ciphertext, tag])).digest('hex')
-  store.set(docId, { title, tier, iv, key, ciphertext, tag, hash })
+  const e: Entry = { title, tier, iv, key, ciphertext, tag, hash }
+  store.set(docId, e)
+  persist(docId, e)
   return { hash, pointer: `s3://atrium-vault/halden/${docId}.enc` }
 }
 
@@ -77,6 +111,6 @@ If you can read this paragraph, the key service released your AES-256-GCM key â€
 which it only does because the ledger confirms your AccessGrant covers Tier 2.`
 
 export function seedVault() {
-  registerDocument('teaser', 'Investment teaser', 1, TEASER)
-  registerDocument('financials', 'Audited financials', 2, FINANCIALS)
+  if (!store.has('teaser')) registerDocument('teaser', 'Investment teaser', 1, TEASER)
+  if (!store.has('financials')) registerDocument('financials', 'Audited financials', 2, FINANCIALS)
 }
