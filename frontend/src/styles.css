@@ -286,6 +286,14 @@ body {
 @keyframes seal { from { opacity: 0; transform: scaleX(.4); transform-origin: left; } to { opacity: 1; transform: scaleX(1); } }
 .sealed-label { font-family: var(--mono); font-size: 11px; color: var(--seal); margin-top: auto; letter-spacing: 0.4px; }
 
+/* ---- Add document (seller) ---- */
+.add-doc { margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line); display: grid; gap: 10px; }
+.add-doc-row { display: flex; gap: 8px; }
+.add-doc-row .field { flex: 1; }
+.doc-tier { flex: 0 0 84px !important; text-align: center; }
+.add-doc-content { font-family: var(--body); resize: vertical; line-height: 1.5; }
+.add-doc .btn { justify-self: start; }
+
 /* ---- Trail ---- */
 .trail { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .trail li { display: flex; align-items: center; gap: 12px; padding: 12px 16px; font-size: 13px; border-top: 1px solid var(--line); }

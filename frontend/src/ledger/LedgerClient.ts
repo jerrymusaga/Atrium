@@ -9,6 +9,8 @@ export interface LedgerClient {
   listViewers(): Promise<Viewer[]>
   // Returns the deal AS SEEN BY `viewer` — documents redacted, trail/offers scoped.
   getDealView(viewer: PartyId): Promise<DealView>
+  // Seller adds a document at ANY tier: encrypted off-ledger, hash + tier recorded on-ledger.
+  addDocument(viewer: PartyId, draft: { title: string; tier: number; content: string }): Promise<void>
   // Seller onboards a buyer to the deal: ensures the buyer party exists on the ledger and
   // issues an AccessGrant at the given tier. Returns the new party id.
   inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId>

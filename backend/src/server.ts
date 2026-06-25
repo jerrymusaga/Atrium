@@ -13,7 +13,7 @@ import express from 'express'
 import {
   activeContracts, allocatePartyByHint, create, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
-import { decryptDocument, docMeta, seedVault } from './vault.js'
+import { decryptDocument, docMeta, registerDocument, seedVault } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
@@ -232,6 +232,27 @@ app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
+// --- seller uploads a document at ANY tier (dynamic data room, N tiers) ---
+// Encrypt it off-ledger in the vault; record only the hash + pointer + tier on-ledger as a
+// Document (seller-signatory). Buyers granted >= that tier can later decrypt it.
+app.post('/deals/:dealId/documents', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, title, tier, content } = req.body ?? {}
+    if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can add documents' })
+    const name = String(title ?? '').trim()
+    const body = String(content ?? '')
+    const t = Math.max(1, Math.floor(Number(tier) || 1))
+    if (!name || !body) return res.status(400).json({ error: 'title and content required' })
+    const seller = await partyId(SELLER)
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'doc'
+    const docId = `${slug}-${Date.now().toString(36).slice(-4)}`
+    const { hash, pointer } = registerDocument(docId, name, t, body)
+    await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId, title: name, tier: String(t), contentHash: hash, blobPointer: pointer })
+    res.json({ docId, title: name, tier: t, hash })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
 // --- the diligence copilot: privacy-bounded AI ---
 // The model receives ONLY the documents this party's on-ledger grant authorizes (same gate as
 // the key service). So it can't answer about a tier the caller can't see — it never gets those
@@ -371,7 +392,7 @@ app.get('/viewers', async (_req, res) => {
     const buyers = grants
       .map((c) => ({ name: labelFor(c.createArgument.buyer), tier: num(c.createArgument.maxTier) }))
       .filter((b) => (seen.has(b.name) ? false : (seen.add(b.name), true)))
-      .map((b) => ({ party: b.name, label: `${b.name} (Buyer · ${b.tier >= 2 ? 'tier 1+2' : 'tier 1'})`, role: 'buyer' as const, live: false }))
+      .map((b) => ({ party: b.name, label: `${b.name} (Buyer · up to tier ${b.tier})`, role: 'buyer' as const, live: false }))
     // A real external party on its own validator (acts with its own token) — flagged as a live identity.
     const remoteLens = REMOTE && !buyers.some((b) => b.party === REMOTE.label)
       ? [{ party: REMOTE.label, label: `${REMOTE.label} (Buyer · own validator)`, role: 'buyer' as const, live: true }]
@@ -388,7 +409,7 @@ app.post('/deals/:dealId/invite', async (req, res) => {
     const { party: prefix, buyerName, buyerParty, tier } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can invite buyers' })
     const seller = await partyId(SELLER)
-    const maxTier = Number(tier) >= 2 ? 2 : 1
+    const maxTier = Math.max(1, Math.floor(Number(tier) || 1)) // any tier, not just 1/2
     // Two modes: allocate a fresh local buyer (buyerName), or invite an EXISTING party by its full
     // id (buyerParty) — e.g. a teammate on another validator. Cross-node disclosure routes the grant
     // to their participant via the shared synchronizer; we don't allocate or hold rights for them.

@@ -24,6 +24,10 @@ export default function App() {
   const [asking, setAsking] = useState(false)
   const [answer, setAnswer] = useState<AskResult | null>(null)
   const [entered, setEntered] = useState(false)
+  const [docTitle, setDocTitle] = useState('')
+  const [docTier, setDocTier] = useState(1)
+  const [docContent, setDocContent] = useState('')
+  const [addingDoc, setAddingDoc] = useState(false)
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [rollback, setRollback] = useState<string | null>(null)
@@ -75,6 +79,21 @@ export default function App() {
       await refreshViewers()
       setMsg(`Invited ${name} at tier ${inviteTier} — switch the lens to see their view.`)
     } catch (e) { setMsg((e as Error).message) }
+  }
+
+  async function addDoc() {
+    if (!docTitle.trim() || !docContent.trim()) return
+    setAddingDoc(true)
+    setMsg(null)
+    try {
+      await client.addDocument(viewer, { title: docTitle, tier: docTier, content: docContent })
+      const t = docTier
+      const name = docTitle
+      setDocTitle('')
+      setDocContent('')
+      await load(true)
+      setMsg(`Added "${name}" at tier ${t} — encrypted; only buyers granted tier ${t}+ can decrypt it.`)
+    } catch (e) { setMsg((e as Error).message) } finally { setAddingDoc(false) }
   }
 
   async function makeOffer() {
@@ -211,11 +230,13 @@ export default function App() {
               />
               <select className="field tier-sel" value={inviteTier} onChange={(e) => setInviteTier(Number(e.target.value))}>
                 <option value={1}>Tier 1</option>
-                <option value={2}>Tier 1+2</option>
+                <option value={2}>Tier 2</option>
+                <option value={3}>Tier 3</option>
+                <option value={4}>Tier 4</option>
               </select>
             </div>
             <button className="btn wide" disabled={!inviteName.trim()} onClick={invite}>
-              Onboard to the deal room
+              Onboard at tier {inviteTier}
             </button>
             <p className="lens-note">
               Registers a new ledger party and issues their access grant. They appear as a new lens.
@@ -262,6 +283,19 @@ export default function App() {
               </article>
             ))}
           </div>
+
+          {current.role === 'seller' && !view?.settled && (
+            <div className="add-doc">
+              <div className="add-doc-row">
+                <input className="field" placeholder="New document title" value={docTitle} onChange={(e) => setDocTitle(e.target.value)} />
+                <input className="field doc-tier" type="number" min={1} value={docTier} title="Access tier" onChange={(e) => setDocTier(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
+              </div>
+              <textarea className="field add-doc-content" rows={3} placeholder="Document contents — encrypted off-ledger; the key is released only to buyers granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
+              <button className="btn" disabled={addingDoc || !docTitle.trim() || !docContent.trim()} onClick={addDoc}>
+                {addingDoc ? 'Encrypting & recording…' : `+ Add document at tier ${docTier}`}
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Access trail */}

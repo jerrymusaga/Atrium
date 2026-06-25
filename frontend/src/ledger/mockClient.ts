@@ -109,6 +109,17 @@ export const mockClient: LedgerClient = {
     return VIEWERS
   },
 
+  // Seller adds a document at any tier — encrypted off-ledger (mocked), gated by tier.
+  async addDocument(viewer: PartyId, draft: { title: string; tier: number; content: string }) {
+    if (viewer !== SELLER) throw new Error('Only the seller can add documents')
+    const title = draft.title.trim()
+    if (!title || !draft.content.trim()) throw new Error('title and content required')
+    await wait(150)
+    const t = Math.max(1, Math.floor(draft.tier || 1))
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'doc'
+    docs.push({ docId: `${slug}-${Date.now().toString(36).slice(-4)}`, title, tier: t, contentHash: 'sha256:' + Math.random().toString(16).slice(2, 18), content: draft.content })
+  },
+
   // Seller onboards a buyer at runtime: register the party (insert before the Regulator)
   // and issue an access grant at the chosen tier. The new lens appears immediately.
   async inviteBuyer(viewer: PartyId, buyerName: string, tier: number) {

@@ -26,6 +26,9 @@ export const httpClient: LedgerClient = {
     return j<Viewer[]>(`/viewers`)
   },
 
+  async addDocument(viewer: PartyId, draft: { title: string; tier: number; content: string }) {
+    await post(`/deals/${DEAL}/documents`, { party: viewer, ...draft })
+  },
   async inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId> {
     const r = await post(`/deals/${DEAL}/invite`, { party: viewer, buyerName, tier }) as any
     return r.party as PartyId
