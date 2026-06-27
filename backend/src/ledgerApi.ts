@@ -169,3 +169,16 @@ export async function create(actAs: string, templateId: string, createArguments:
   })
   return r.transaction.events[0].CreatedEvent as CreatedEvent
 }
+
+// Multi-signatory create: submits as all parties in actAs simultaneously.
+export async function createMulti(actAs: string[], templateId: string, createArguments: Record<string, any>, conn: Conn = defaultConn): Promise<CreatedEvent> {
+  const r = await api<any>(conn, '/v2/commands/submit-and-wait-for-transaction', {
+    commands: {
+      userId: conn.userId,
+      commandId: `atrium-create-${Date.now()}`,
+      actAs,
+      commands: [{ CreateCommand: { templateId, createArguments } }],
+    },
+  })
+  return r.transaction.events[0].CreatedEvent as CreatedEvent
+}

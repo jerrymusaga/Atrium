@@ -5,7 +5,6 @@ import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
 import type { AskResult, CloseAttestation, DealView, DocContent, Viewer } from './types'
 
-// VITE_LIVE=1 → drive the real Canton ledger via the executor; otherwise the in-browser mock.
 const LIVE = import.meta.env.VITE_LIVE === '1'
 const client = LIVE ? httpClient : mockClient
 
@@ -35,16 +34,16 @@ export default function App() {
   const [inviteName, setInviteName] = useState('')
   const [inviteTier, setInviteTier] = useState(1)
   const [bid, setBid] = useState('')
+  const [commitAmt, setCommitAmt] = useState('')
+  const [committing, setCommitting] = useState(false)
+  const [approving, setApproving] = useState(false)
 
-  // Cache every lens's view so flipping is INSTANT even against a live (latent) validator —
-  // show the cached projection immediately, then refresh it in the background.
   const viewCache = useRef<Record<string, DealView>>({})
 
   async function refreshViewers() {
     const vs = await client.listViewers()
     setViewers(vs)
     setViewer((v) => v || vs[0]?.party || '')
-    // Warm the cache for all lenses in parallel so the privacy flip is snappy on first try.
     void Promise.all(vs.map(async (v) => {
       try { viewCache.current[v.party] = await client.getDealView(v.party) } catch { /* ignore */ }
     }))
@@ -52,32 +51,27 @@ export default function App() {
   }
   useEffect(() => { refreshViewers() }, [])
 
-  // Re-fetch the current lens (and refresh its cache). Pass invalidate=true after a mutation
-  // to drop stale cached projections so every lens reflects the new ledger state.
   async function load(invalidate = false) {
     if (!viewer) return
     if (invalidate) viewCache.current = {}
     const cached = viewCache.current[viewer]
-    if (cached) setView(cached) // instant paint from cache
+    if (cached) setView(cached)
     const fresh = await client.getDealView(viewer)
     viewCache.current[viewer] = fresh
     setView(fresh)
   }
-  useEffect(() => {
-    load()
-  }, [viewer])
+  useEffect(() => { load() }, [viewer])
 
   const current = viewers.find((v) => v.party === viewer)
-  const acceptedOffer = view?.offers.find((o) => o.status === 'accepted')
-  const myOpenOffer = view?.offers.find((o) => current?.role === 'buyer' && o.status === 'open')
+  const isApprover = current?.role === 'board' || current?.role === 'legal' || current?.role === 'compliance'
+  const approverRole = current?.role === 'board' ? 'BOARD' : current?.role === 'legal' ? 'LEGAL' : 'COMPLIANCE'
 
   async function invite() {
     try {
-      const name = inviteName
-      await client.inviteBuyer(viewer, name, inviteTier)
+      await client.inviteBuyer(viewer, inviteName, inviteTier)
       setInviteName('')
       await refreshViewers()
-      setMsg(`Invited ${name} at tier ${inviteTier} — switch the lens to see their view.`)
+      setMsg(`Invited ${inviteName} at tier ${inviteTier} — switch the lens to see their view.`)
     } catch (e) { setMsg((e as Error).message) }
   }
 
@@ -87,10 +81,8 @@ export default function App() {
     setMsg(null)
     try {
       await client.addDocument(viewer, { title: docTitle, tier: docTier, content: docContent })
-      const t = docTier
-      const name = docTitle
-      setDocTitle('')
-      setDocContent('')
+      const t = docTier; const name = docTitle
+      setDocTitle(''); setDocContent('')
       await load(true)
       setMsg(`Added "${name}" at tier ${t} — encrypted; only buyers granted tier ${t}+ can decrypt it.`)
     } catch (e) { setMsg((e as Error).message) } finally { setAddingDoc(false) }
@@ -104,22 +96,40 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) }
   }
 
+  async function commitCBTC() {
+    const amt = Number(commitAmt)
+    if (!(amt > 0)) return
+    setCommitting(true)
+    setMsg(null)
+    try {
+      await client.commitCBTC(viewer, amt)
+      setCommitAmt('')
+      await load(true)
+      setMsg(`Committed ${amt} cBTC on-ledger — the founder can see your commitment toward the raise target.`)
+    } catch (e) { setMsg((e as Error).message) } finally { setCommitting(false) }
+  }
+
+  async function approve() {
+    setApproving(true)
+    setMsg(null)
+    try {
+      await client.approve(viewer, approverRole)
+      await load(true)
+      setMsg(`${approverRole} approval recorded on-ledger — the founder's close gate now reflects this.`)
+    } catch (e) { setMsg((e as Error).message) } finally { setApproving(false) }
+  }
+
   if (!entered) return <Landing onEnter={() => setEntered(true)} live={LIVE} />
   if (!current) return <div className="app booting">Loading the deal room…</div>
 
   async function openDoc(docId: string) {
-    setOpening(docId)
-    setMsg(null)
+    setOpening(docId); setMsg(null)
     try {
-      const content = await client.openDocument(viewer, docId) // key released only if the ledger authorizes
+      const content = await client.openDocument(viewer, docId)
       setDoc(content)
       setOpened((o) => ({ ...o, [docId]: true }))
-      await load(true) // the access trail just grew on-ledger
-    } catch (e) {
-      setMsg((e as Error).message)
-    } finally {
-      setOpening(null)
-    }
+      await load(true)
+    } catch (e) { setMsg((e as Error).message) } finally { setOpening(null) }
   }
 
   async function accept(offerId: string) {
@@ -128,32 +138,21 @@ export default function App() {
   }
 
   async function settle() {
-    setSettling(true)
-    setMsg(null)
-    setRollback(null)
+    setSettling(true); setMsg(null); setRollback(null)
     try {
       await client.settle(viewer)
       await load(true)
-    } catch (e) {
-      setMsg((e as Error).message)
-    } finally {
-      setSettling(false)
-    }
+    } catch (e) { setMsg((e as Error).message) } finally { setSettling(false) }
   }
 
-  // Pull a leg mid-close: proves the swap is all-or-nothing (mirrors testAtomicityHolds).
   async function stressClose() {
-    setSettling(true)
-    setRollback(null)
-    setMsg(null)
+    setSettling(true); setRollback(null); setMsg(null)
     try {
       await client.attemptBrokenClose(viewer)
     } catch (e) {
       setRollback((e as Error).message)
-      await load(true) // re-read: every balance is exactly as before
-    } finally {
-      setSettling(false)
-    }
+      await load(true)
+    } finally { setSettling(false) }
   }
 
   async function verifyClose() {
@@ -162,16 +161,13 @@ export default function App() {
 
   async function ask() {
     if (!question.trim()) return
-    setAsking(true)
-    setAnswer(null)
-    try {
-      setAnswer(await client.ask(viewer, question))
-    } catch (e) {
-      setMsg((e as Error).message)
-    } finally {
-      setAsking(false)
-    }
+    setAsking(true); setAnswer(null)
+    try { setAnswer(await client.ask(viewer, question)) }
+    catch (e) { setMsg((e as Error).message) } finally { setAsking(false) }
   }
+
+  const conds = view?.conditions
+  const allGreen = conds?.allGreen ?? false
 
   return (
     <div className="app">
@@ -180,17 +176,18 @@ export default function App() {
           <AtriumMark className="mark" />
           <div>
             <div className="brand-name">ATRIUM</div>
-            <div className="brand-sub">the deal room that closes</div>
+            <div className="brand-sub">private capital markets OS</div>
           </div>
         </div>
 
         {view && (
           <div className="deal-card">
-            <div className="eyebrow">Open deal</div>
+            <div className="eyebrow">Active fundraise</div>
             <h1 className="deal-title">{view.deal.title}</h1>
             <dl className="deal-meta">
               <div><dt>Instrument</dt><dd className="mono">{view.deal.instrument}</dd></div>
-              <div><dt>On offer</dt><dd className="mono">{view.deal.quantity.toLocaleString()} units</dd></div>
+              <div><dt>Equity on offer</dt><dd className="mono">{view.deal.quantity.toLocaleString()} units</dd></div>
+              {view.deal.raiseTarget ? <div><dt>Raise target</dt><dd className="mono">{view.deal.raiseTarget} cBTC</dd></div> : null}
               <div><dt>Deal ref</dt><dd className="mono">{view.deal.dealId}</dd></div>
             </dl>
           </div>
@@ -207,7 +204,7 @@ export default function App() {
               >
                 <span className="lens-dot" />
                 <span className="lens-label">{v.label}</span>
-                {v.live && <span className="live-tag" title="Real party on its own validator, acting with its own token">● live</span>}
+                {v.live && <span className="live-tag" title="Real party on its own validator">● live</span>}
               </button>
             ))}
           </div>
@@ -219,11 +216,11 @@ export default function App() {
 
         {current.role === 'seller' && !view?.settled && (
           <div className="invite">
-            <div className="eyebrow">Invite a buyer</div>
+            <div className="eyebrow">Invite an investor</div>
             <div className="invite-row">
               <input
                 className="field"
-                placeholder="Buyer name"
+                placeholder="Investor name"
                 value={inviteName}
                 onChange={(e) => setInviteName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && inviteName.trim()) invite() }}
@@ -238,9 +235,6 @@ export default function App() {
             <button className="btn wide" disabled={!inviteName.trim()} onClick={invite}>
               Onboard at tier {inviteTier}
             </button>
-            <p className="lens-note">
-              Registers a new ledger party and issues their access grant. They appear as a new lens.
-            </p>
           </div>
         )}
       </aside>
@@ -250,231 +244,339 @@ export default function App() {
           You are <strong>{current.label}</strong>. {viewerBlurb(current.role)}
         </header>
 
-        {/* Documents */}
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Data room</h2>
-            <span className="count mono">{view?.documents.filter((d) => d.accessible).length ?? 0}/{view?.documents.length ?? 0} in your tier</span>
-          </div>
-          <div className="docs">
-            {view?.documents.map((d) => (
-              <article key={d.docId} className={`doc ${d.accessible ? 'is-open' : 'is-sealed'}`}>
-                <div className="doc-top">
-                  <span className="tier mono">TIER {d.tier}</span>
-                  {d.accessible
-                    ? <span className="hash mono">{d.contentHash}</span>
-                    : <span className="lock">🔒</span>}
-                </div>
-                {d.accessible ? (
-                  <>
-                    <h3 className="doc-title">{d.title}</h3>
-                    <button className="btn ghost" disabled={opening === d.docId} onClick={() => openDoc(d.docId)}>
-                      {opening === d.docId ? 'Releasing key…' : opened[d.docId] ? 'Open again' : 'Open document'}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <div className="redaction">
-                      <span /><span /><span />
-                    </div>
-                    <div className="sealed-label">Sealed — not in your tier</div>
-                  </>
-                )}
-              </article>
-            ))}
-          </div>
-
-          {current.role === 'seller' && !view?.settled && (
-            <div className="add-doc">
-              <div className="add-doc-row">
-                <input className="field" placeholder="New document title" value={docTitle} onChange={(e) => setDocTitle(e.target.value)} />
-                <input className="field doc-tier" type="number" min={1} value={docTier} title="Access tier" onChange={(e) => setDocTier(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
-              </div>
-              <textarea className="field add-doc-content" rows={3} placeholder="Document contents — encrypted off-ledger; the key is released only to buyers granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
-              <button className="btn" disabled={addingDoc || !docTitle.trim() || !docContent.trim()} onClick={addDoc}>
-                {addingDoc ? 'Encrypting & recording…' : `+ Add document at tier ${docTier}`}
-              </button>
+        {/* ── Approver panel (Board / Legal / Compliance) ── */}
+        {isApprover && (
+          <section className="panel panel-approver">
+            <div className="panel-head">
+              <h2>{approverRole === 'BOARD' ? 'Board' : approverRole === 'LEGAL' ? 'Legal' : 'Compliance'} Approval</h2>
+              <span className={`chip mono ${view?.myApproval ? 'settled' : ''}`}>
+                {view?.myApproval ? '● Approved' : '○ Pending'}
+              </span>
             </div>
-          )}
-        </section>
-
-        {/* Access trail */}
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Access trail</h2>
-            <span className="count mono">{view?.accessTrail.length ?? 0} events</span>
-          </div>
-          <p className="panel-note">
-            {current.role === 'buyer'
-              ? 'You see only your own accesses. You cannot see who else is in the room.'
-              : 'Tamper-proof, ledger-timestamped: who opened what, when.'}
-          </p>
-          <ul className="trail">
-            {view?.accessTrail.map((e, i) => (
-              <li key={i}>
-                <span className="t-time mono">{e.accessedAt}</span>
-                <span className="t-who">{e.buyerLabel}</span>
-                <span className="t-arrow">opened</span>
-                <span className="t-doc">{e.docTitle}</span>
-              </li>
-            ))}
-            {view?.accessTrail.length === 0 && <li className="empty">No accesses recorded yet.</li>}
-          </ul>
-        </section>
-
-        {/* Diligence copilot — privacy-bounded AI */}
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Diligence copilot</h2>
-            <span className="count mono">Venice AI · tier-bounded</span>
-          </div>
-          <p className="panel-note">
-            Ask about the deal. The copilot is given <strong>only the documents your grant authorizes</strong> —
-            it can't answer about a tier you can't decrypt, because it never receives those bytes.
-          </p>
-          <div className="ask-row">
-            <input
-              className="field"
-              placeholder={current.role === 'seller' ? 'e.g. summarize the deal and the financials' : 'e.g. what was FY2025 EBITDA?'}
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') ask() }}
-            />
-            <button className="btn solid" disabled={asking || !question.trim()} onClick={ask}>
-              {asking ? 'Thinking…' : 'Ask'}
-            </button>
-          </div>
-          {answer && (
-            <div className="answer">
-              <div className="answer-body">{answer.answer}</div>
-              <div className="answer-foot mono">
-                🔒 copilot was shown: {answer.authorizedDocs.length ? answer.authorizedDocs.join(' · ') : 'no documents'} ({answer.tier})
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* Offers + close */}
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Offers &amp; settlement</h2>
-            <span className={`chip ${view?.settled ? 'settled' : ''} mono`}>
-              {view?.settled ? '● Settled atomically' : '○ Not settled'}
-            </span>
-          </div>
-          {current.role === 'buyer' && (
-            <p className="panel-note kyc-line">
-              {view?.kyc
-                ? <>Your compliance status: <span className="kyc-badge ok">✓ {view.kyc.level} · {view.kyc.jurisdiction}</span> — the seller can settle with you.</>
-                : <>Your compliance status: <span className="kyc-badge pending">KYC pending</span> — the seller cannot settle until you're verified.</>}
-            </p>
-          )}
-
-          <ul className="offers">
-            {view?.offers.map((o) => (
-              <li key={o.offerId} className={`offer status-${o.status}`}>
-                <div>
-                  <div className="o-buyer">
-                    {o.buyerLabel}
-                    {o.kyc
-                      ? <span className="kyc-badge ok" title={`${o.kyc.level} · ${o.kyc.jurisdiction}`}>✓ KYC</span>
-                      : <span className="kyc-badge pending">KYC pending</span>}
-                  </div>
-                  <div className="o-terms mono">{money(o.pricePerUnit)}/unit · {o.quantity.toLocaleString()} units · {money(o.pricePerUnit * o.quantity)}</div>
-                </div>
-                {current.role === 'seller' && o.status === 'open' && !view?.settled && (
-                  <button className="btn" disabled={!o.kyc} title={o.kyc ? '' : 'Bidder must be KYC-cleared'} onClick={() => accept(o.offerId)}>Accept</button>
-                )}
-                {o.status === 'accepted' && <span className="o-flag mono">ACCEPTED</span>}
-              </li>
-            ))}
-            {view?.offers.length === 0 && <li className="empty">No offers visible to you.</li>}
-          </ul>
-
-          {current.role === 'buyer' && !view?.settled && !myOpenOffer && (
-            <div className="bid-row">
-              <input
-                className="field"
-                inputMode="decimal"
-                placeholder="Your price / unit"
-                value={bid}
-                onChange={(e) => setBid(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && Number(bid) > 0) makeOffer() }}
-              />
-              <button className="btn solid" disabled={!(Number(bid) > 0)} onClick={makeOffer}>
-                Submit bid for {view?.deal.quantity.toLocaleString()} units
-              </button>
-            </div>
-          )}
-
-          <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
-            <div className="legs">
-              {view?.holdings.map((h, i) => (
-                <div key={i} className={`leg ${view?.settled ? 'leg-swapped' : ''}`}>
-                  <div className="leg-amt mono">{h.instrument === 'USD-CASH' ? money(h.amount) : h.amount.toLocaleString()}</div>
-                  <div className="leg-inst mono">{h.instrument}</div>
-                  <div className="leg-owner"><span className="leg-arrow">{view?.settled ? '→ ' : ''}</span>{h.ownerLabel}</div>
-                </div>
-              ))}
-              {settling && <div className="swap-pulse" aria-hidden />}
-            </div>
-
-            {current.role === 'seller' && acceptedOffer && !view?.settled && (
+            {view?.myApproval ? (
+              <p className="panel-note">
+                Your <strong>{view.myApproval.role}</strong> approval was recorded on-ledger at {view.myApproval.approvedAt}.
+                The founder's close gate will include this when all conditions are met.
+              </p>
+            ) : (
               <>
-                <button className="btn solid wide" disabled={settling} onClick={settle}>
-                  {settling ? 'Settling both legs in one transaction…' : 'Settle — payment vs ownership, atomically'}
-                </button>
-                <button className="btn ghost wide stress" disabled={settling} onClick={stressClose}>
-                  Stress-test: pull a leg mid-close →
+                <p className="panel-note">
+                  Review the fundraise. If satisfied, record your on-ledger approval — the founder cannot
+                  close the deal until all required roles have signed.
+                </p>
+                <button className="btn solid wide" disabled={approving} onClick={approve}>
+                  {approving ? 'Recording approval on-ledger…' : `Record ${approverRole} approval`}
                 </button>
               </>
             )}
+          </section>
+        )}
 
-            {rollback && (
-              <div className="rollback-banner">
-                <span className="rb-mark mono">⟲ REVERTED</span>
-                {rollback} <em>There is no partial settlement to represent.</em>
-              </div>
-            )}
-
-            {view?.settled && (
-              <div className="settled-banner">
-                <strong>One transaction.</strong> Cash and ownership swapped together — or not at all.
-              </div>
-            )}
-
-            {current.role === 'buyer' && !view?.settled && (
-              <div className="muted-note">Only the seller drives settlement.</div>
-            )}
-
-            {current.role === 'regulator' && (
-              <div className="attest">
-                <button className="btn wide" onClick={verifyClose}>
-                  Verify the close matched the recorded bid
-                </button>
-                {attestation && (
-                  <div className={`attest-card ${attestation.matched ? 'ok' : 'pending'}`}>
-                    {attestation.settled ? (
-                      <>
-                        <div className="attest-line">
-                          <span className="mono">{attestation.matched ? '✓ VERIFIED' : '✗ MISMATCH'}</span>
-                          settled cash {money(attestation.settledCash)} {attestation.matched ? '=' : '≠'} winning bid {money(attestation.bidPricePerUnit)} × {attestation.bidQuantity.toLocaleString()}
-                        </div>
-                        <div className="attest-sub">
-                          Attested from the recorded bid and the settlement legs — <strong>without any tier-2 document access</strong>.
-                        </div>
-                      </>
-                    ) : (
-                      <div className="attest-line">Not settled yet — nothing to attest.</div>
-                    )}
+        {/* ── Documents ── */}
+        {!isApprover && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Data room</h2>
+              <span className="count mono">{view?.documents.filter((d) => d.accessible).length ?? 0}/{view?.documents.length ?? 0} in your tier</span>
+            </div>
+            <div className="docs">
+              {view?.documents.map((d) => (
+                <article key={d.docId} className={`doc ${d.accessible ? 'is-open' : 'is-sealed'}`}>
+                  <div className="doc-top">
+                    <span className="tier mono">TIER {d.tier}</span>
+                    {d.accessible
+                      ? <span className="hash mono">{d.contentHash}</span>
+                      : <span className="lock">🔒</span>}
                   </div>
-                )}
+                  {d.accessible ? (
+                    <>
+                      <h3 className="doc-title">{d.title}</h3>
+                      <button className="btn ghost" disabled={opening === d.docId} onClick={() => openDoc(d.docId)}>
+                        {opening === d.docId ? 'Releasing key…' : opened[d.docId] ? 'Open again' : 'Open document'}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="redaction"><span /><span /><span /></div>
+                      <div className="sealed-label">Sealed — not in your tier</div>
+                    </>
+                  )}
+                </article>
+              ))}
+            </div>
+
+            {current.role === 'seller' && !view?.settled && (
+              <div className="add-doc">
+                <div className="add-doc-row">
+                  <input className="field" placeholder="New document title" value={docTitle} onChange={(e) => setDocTitle(e.target.value)} />
+                  <input className="field doc-tier" type="number" min={1} value={docTier} title="Access tier" onChange={(e) => setDocTier(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
+                </div>
+                <textarea className="field add-doc-content" rows={3} placeholder="Document contents — encrypted off-ledger; key released only to buyers granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
+                <button className="btn" disabled={addingDoc || !docTitle.trim() || !docContent.trim()} onClick={addDoc}>
+                  {addingDoc ? 'Encrypting & recording…' : `+ Add document at tier ${docTier}`}
+                </button>
               </div>
             )}
-          </div>
-        </section>
+          </section>
+        )}
 
-        {view?.capTable && view.capTable.length > 0 && (
+        {/* ── Access trail ── */}
+        {!isApprover && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Access trail</h2>
+              <span className="count mono">{view?.accessTrail.length ?? 0} events</span>
+            </div>
+            <p className="panel-note">
+              {current.role === 'buyer'
+                ? 'You see only your own accesses. You cannot see who else is in the room.'
+                : 'Tamper-proof, ledger-timestamped: who opened what, when.'}
+            </p>
+            <ul className="trail">
+              {view?.accessTrail.map((e, i) => (
+                <li key={i}>
+                  <span className="t-time mono">{e.accessedAt}</span>
+                  <span className="t-who">{e.buyerLabel}</span>
+                  <span className="t-arrow">opened</span>
+                  <span className="t-doc">{e.docTitle}</span>
+                </li>
+              ))}
+              {view?.accessTrail.length === 0 && <li className="empty">No accesses recorded yet.</li>}
+            </ul>
+          </section>
+        )}
+
+        {/* ── Diligence copilot ── */}
+        {!isApprover && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Diligence copilot</h2>
+              <span className="count mono">Venice AI · tier-bounded</span>
+            </div>
+            <p className="panel-note">
+              Ask about the deal. The copilot is given <strong>only the documents your grant authorizes</strong> —
+              it can't answer about a tier you can't decrypt, because it never receives those bytes.
+            </p>
+            <div className="ask-row">
+              <input
+                className="field"
+                placeholder={current.role === 'seller' ? 'e.g. summarize the deal and the financials' : 'e.g. what was FY2025 EBITDA?'}
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') ask() }}
+              />
+              <button className="btn solid" disabled={asking || !question.trim()} onClick={ask}>
+                {asking ? 'Thinking…' : 'Ask'}
+              </button>
+            </div>
+            {answer && (
+              <div className="answer">
+                <div className="answer-body">{answer.answer}</div>
+                <div className="answer-foot mono">
+                  🔒 copilot was shown: {answer.authorizedDocs.length ? answer.authorizedDocs.join(' · ') : 'no documents'} ({answer.tier})
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ── Investor: commit cBTC + sealed bid ── */}
+        {current.role === 'buyer' && !view?.settled && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Your position</h2>
+              <span className="count mono">cBTC commitment + sealed bid</span>
+            </div>
+            {view?.kyc && (
+              <p className="panel-note kyc-line">
+                Compliance: <span className="kyc-badge ok">✓ {view.kyc.level} · {view.kyc.jurisdiction}</span>
+              </p>
+            )}
+
+            {view?.myCommitment ? (
+              <div className="commit-status">
+                <span className="commit-amt mono">{view.myCommitment.amount} cBTC</span>
+                <span className="commit-label">locked on-ledger since {view.myCommitment.committedAt}</span>
+              </div>
+            ) : (
+              <div className="bid-row">
+                <input
+                  className="field"
+                  inputMode="decimal"
+                  placeholder="cBTC to commit (e.g. 25)"
+                  value={commitAmt}
+                  onChange={(e) => setCommitAmt(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commitCBTC() }}
+                />
+                <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commitCBTC}>
+                  {committing ? 'Locking cBTC…' : 'Commit cBTC'}
+                </button>
+              </div>
+            )}
+
+            {/* Sealed bid */}
+            {view?.offers.length === 0 && !view?.myCommitment ? null : (
+              <>
+                {view?.offers.length === 0 ? (
+                  <div className="bid-row" style={{ marginTop: 12 }}>
+                    <input
+                      className="field"
+                      inputMode="decimal"
+                      placeholder="Bid price / equity unit"
+                      value={bid}
+                      onChange={(e) => setBid(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && Number(bid) > 0) makeOffer() }}
+                    />
+                    <button className="btn" disabled={!(Number(bid) > 0)} onClick={makeOffer}>
+                      Submit sealed bid
+                    </button>
+                  </div>
+                ) : (
+                  <ul className="offers" style={{ marginTop: 12 }}>
+                    {view?.offers.map((o) => (
+                      <li key={o.offerId} className="offer status-open">
+                        <div>
+                          <div className="o-buyer">Your sealed bid</div>
+                          <div className="o-terms mono">{o.quantity.toLocaleString()} units · submitted {o.submittedAt}</div>
+                        </div>
+                        <span className="o-flag mono">SEALED</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
+        {/* ── Founder: conditions panel + close ── */}
+        {current.role === 'seller' && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Close conditions</h2>
+              <span className={`chip mono ${allGreen ? 'settled' : ''}`}>
+                {allGreen ? '● All green — ready to close' : '○ Conditions pending'}
+              </span>
+            </div>
+
+            {conds && (
+              <>
+                <div className="conditions-bar-wrap">
+                  <div className="conditions-bar" style={{ width: `${conds.percentFunded}%` }} />
+                  <span className="conditions-bar-label mono">{conds.totalCommitted} / {conds.raiseTarget} cBTC raised ({conds.percentFunded}%)</span>
+                </div>
+
+                <ul className="conditions-list">
+                  {conds.conditions.map((c) => (
+                    <li key={c.key} className={`cond-item ${c.done ? 'cond-done' : 'cond-pending'}`}>
+                      <span className="cond-check mono">{c.done ? '✓' : '○'}</span>
+                      <span className="cond-label">{c.label}</span>
+                      {c.detail && <span className="cond-detail mono">{c.detail}</span>}
+                      {c.approvedAt && <span className="cond-detail mono">{c.approvedAt}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {/* Seller also sees all bids */}
+            {view?.offers && view.offers.length > 0 && (
+              <ul className="offers" style={{ marginTop: 16 }}>
+                {view.offers.map((o) => (
+                  <li key={o.offerId} className="offer status-open">
+                    <div>
+                      <div className="o-buyer">
+                        {o.buyerLabel}
+                        {o.kyc
+                          ? <span className="kyc-badge ok" title={`${o.kyc.level} · ${o.kyc.jurisdiction}`}>✓ KYC</span>
+                          : <span className="kyc-badge pending">KYC pending</span>}
+                      </div>
+                      <div className="o-terms mono">{o.quantity.toLocaleString()} units · {o.submittedAt}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
+              <div className="legs">
+                {view?.holdings.map((h, i) => (
+                  <div key={i} className={`leg ${view?.settled ? 'leg-swapped' : ''}`}>
+                    <div className="leg-amt mono">{h.instrument === 'cBTC' ? `${h.amount.toLocaleString()} cBTC` : h.amount.toLocaleString()}</div>
+                    <div className="leg-inst mono">{h.instrument}</div>
+                    <div className="leg-owner"><span className="leg-arrow">{view?.settled ? '→ ' : ''}</span>{h.ownerLabel}</div>
+                  </div>
+                ))}
+                {settling && <div className="swap-pulse" aria-hidden />}
+              </div>
+
+              {!view?.settled && (
+                <>
+                  <button
+                    className="btn solid wide"
+                    disabled={settling || !allGreen}
+                    title={allGreen ? '' : 'All 4 conditions must be green before closing'}
+                    onClick={settle}
+                  >
+                    {settling ? 'Settling cBTC ↔ equity in one transaction…' : 'Close — cBTC ↔ equity, atomically'}
+                  </button>
+                  <button className="btn ghost wide stress" disabled={settling} onClick={stressClose}>
+                    Stress-test: pull a leg mid-close →
+                  </button>
+                </>
+              )}
+
+              {rollback && (
+                <div className="rollback-banner">
+                  <span className="rb-mark mono">⟲ REVERTED</span>
+                  {rollback} <em>There is no partial settlement to represent.</em>
+                </div>
+              )}
+
+              {view?.settled && (
+                <div className="settled-banner">
+                  <strong>One transaction.</strong> cBTC and equity swapped together — or not at all.
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* ── Regulator attestation ── */}
+        {current.role === 'regulator' && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Settlement attestation</h2>
+              <span className={`chip mono ${view?.settled ? 'settled' : ''}`}>
+                {view?.settled ? '● Settled atomically' : '○ Not settled'}
+              </span>
+            </div>
+            <div className="attest">
+              <button className="btn wide" onClick={verifyClose}>
+                Verify the close matched the recorded bid
+              </button>
+              {attestation && (
+                <div className={`attest-card ${attestation.matched ? 'ok' : 'pending'}`}>
+                  {attestation.settled ? (
+                    <>
+                      <div className="attest-line">
+                        <span className="mono">{attestation.matched ? '✓ VERIFIED' : '✗ MISMATCH'}</span>
+                        settled cash {money(attestation.settledCash)} {attestation.matched ? '=' : '≠'} winning bid {money(attestation.bidPricePerUnit)} × {attestation.bidQuantity.toLocaleString()}
+                      </div>
+                      <div className="attest-sub">
+                        Attested from the recorded bid and the settlement legs — <strong>without any tier-2 document access</strong>.
+                      </div>
+                    </>
+                  ) : (
+                    <div className="attest-line">Not settled yet — nothing to attest.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {view?.capTable && view.capTable.length > 0 && !isApprover && (
           <section className="panel">
             <div className="panel-head">
               <h2>Cap table</h2>
@@ -494,8 +596,8 @@ export default function App() {
               {view.settled
                 ? 'Ownership transferred on settlement — the share registry now reflects the new holder.'
                 : current.role === 'seller'
-                  ? 'The 120,000-share (12%) stake on offer transfers to the buyer the instant the deal closes.'
-                  : 'Your tokenized ownership will appear here once the seller settles the deal.'}
+                  ? 'The 12% stake on offer transfers to the winning investor the instant the deal closes.'
+                  : 'Your tokenized ownership appears here once the founder closes the deal.'}
             </p>
           </section>
         )}
@@ -503,8 +605,8 @@ export default function App() {
         <footer className="verified">
           <span className={`mode-pill ${LIVE ? 'live' : ''}`}>{LIVE ? '● LIVE on Canton' : '○ in-browser mock'}</span>
           <span className="verified-note">
-            Privacy &amp; atomicity are proven on the ledger by <code>daml test</code> —
-            <code>testPrivacyProjection</code>, <code>testAtomicDvP</code>, <code>testAtomicityHolds</code>.
+            Privacy, atomicity &amp; conditional close are proven by <code>daml test</code> —
+            <code>testPrivacyProjection</code>, <code>testAtomicDvP</code>, <code>testAtomicityHolds</code>, <code>testConditionalClose</code>.
           </span>
         </footer>
 
@@ -533,8 +635,11 @@ export default function App() {
   )
 }
 
-function viewerBlurb(role: 'seller' | 'buyer' | 'regulator') {
-  if (role === 'seller') return 'You see every buyer, every document, the full trail, and both sides of the close.'
-  if (role === 'regulator') return 'You can verify the close matched the recorded bids — without seeing tier-2 contents.'
-  return 'You see only your tier and your own activity. Rival bidders are invisible to you.'
+function viewerBlurb(role: string) {
+  if (role === 'seller')     return 'You see every investor, every document, the full trail, and the conditional close gate.'
+  if (role === 'regulator')  return 'You can verify the close matched the recorded bids — without seeing tier-2 contents.'
+  if (role === 'board')      return 'You must approve before the founder can close. Your signature is recorded on Canton.'
+  if (role === 'legal')      return 'You must approve before the founder can close. Your signature is recorded on Canton.'
+  if (role === 'compliance') return 'KYC/AML clearance. Your on-ledger approval is required for the conditional close.'
+  return 'You see only your tier and your own activity. Rival investors are invisible to you.'
 }

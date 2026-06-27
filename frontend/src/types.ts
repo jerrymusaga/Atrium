@@ -4,8 +4,8 @@ export type PartyId = string
 export type Viewer = {
   party: PartyId
   label: string
-  role: 'seller' | 'buyer' | 'regulator'
-  live?: boolean // a real external party on its own validator, acting with its own token
+  role: 'seller' | 'buyer' | 'regulator' | 'board' | 'legal' | 'compliance'
+  live?: boolean
 }
 
 export type Deal = {
@@ -14,15 +14,14 @@ export type Deal = {
   seller: PartyId
   instrument: string
   quantity: number
+  raiseTarget?: number
 }
 
 export type Document = {
   docId: string
   title: string
-  tier: number // 1 = teaser, 2 = deep
+  tier: number
   contentHash: string
-  // Whether THIS viewer may see the contents. In production this is enforced by the
-  // ledger (the viewer's node simply lacks the data); here the mock filters to mimic it.
   accessible: boolean
 }
 
@@ -36,10 +35,7 @@ export type AccessEvent = {
 
 export type KYC = { level: string; jurisdiction: string }
 
-// Decrypted document content, returned only when the ledger authorized the key release.
 export type DocContent = { docId: string; title: string; tier: number; hash: string; bytes: number; content: string }
-
-// A diligence-copilot answer. `authorizedDocs` is exactly what the model was allowed to read.
 export type AskResult = { answer: string; authorizedDocs: string[]; tier: string }
 
 export type Offer = {
@@ -50,7 +46,7 @@ export type Offer = {
   quantity: number
   submittedAt: string
   status: 'open' | 'accepted' | 'withdrawn'
-  kyc?: KYC | null // current KYC/KYB attestation for the bidder, if any
+  kyc?: KYC | null
 }
 
 export type Holding = {
@@ -60,28 +56,46 @@ export type Holding = {
   amount: number
 }
 
-// A line on the cap table (share registry). Seller/regulator see all lines; a buyer sees only theirs.
 export type CapTableRow = { holderLabel: string; shares: number; pct: number }
+
+export type ConditionItem = {
+  key: string
+  label: string
+  done: boolean
+  detail?: string
+  approvedAt?: string
+}
+
+export type DealConditions = {
+  raiseTarget: number
+  totalCommitted: number
+  percentFunded: number
+  conditions: ConditionItem[]
+  allGreen: boolean
+  commitmentCids?: string[]
+  approvalCids?: string[]
+}
 
 export type DealView = {
   deal: Deal
   documents: Document[]
-  accessTrail: AccessEvent[] // only the events this viewer is entitled to see
-  offers: Offer[] // only the offers this viewer is entitled to see
-  holdings: Holding[] // balances this viewer can see
-  capTable?: CapTableRow[] // share registry — full for seller/regulator, own-line only for a buyer
+  accessTrail: AccessEvent[]
+  offers: Offer[]
+  holdings: Holding[]
+  capTable?: CapTableRow[]
   settled: boolean
-  kyc?: KYC | null // the viewing buyer's own KYC/KYB clearance (null for seller/regulator)
+  kyc?: KYC | null
+  conditions?: DealConditions        // founder view: close gate status
+  myCommitment?: { amount: number; committedAt: string } | null  // investor view
+  myApproval?: { role: string; approvedAt: string } | null       // approver view
 }
 
-// What a regulator (scoped choice-observer on the close) can attest to: that the
-// settlement moved exactly the winning bid — WITHOUT ever seeing tier-2 contents.
 export type CloseAttestation = {
   settled: boolean
   winningBuyerLabel: string | null
   bidPricePerUnit: number
   bidQuantity: number
-  expectedCash: number // price × quantity, from the recorded bid
-  settledCash: number // what the cash leg actually moved
-  matched: boolean // settledCash === expectedCash
+  expectedCash: number
+  settledCash: number
+  matched: boolean
 }

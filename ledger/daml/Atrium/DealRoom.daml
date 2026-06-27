@@ -5,11 +5,11 @@
 --                 into the OFF-CHAIN encrypted blob store. Never carries buyer observers.
 --   * AccessGrant — one per buyer per tier. Visible only to Seller + that Buyer.
 --   * AccessEvent — append-only, immutable "who saw what, when". The differentiator.
---   * Offer — buyer's bid, visible only to Seller. Accepting it triggers the executor
---             app to build the AllocationRequest and settle via Atrium.Dvp.
---
--- Documents live encrypted off-chain; Canton is the authorization + audit layer, not the
--- vault. Byte-confidentiality rests on key management (out of MVP scope).
+--   * Offer — buyer's bid, visible only to Seller.
+--   * Commitment — investor's locked cBTC toward the raise (co-signed by admin/registry).
+--   * Approval — board/legal/compliance sign-off on the close (on-ledger, unforgeable).
+--   * Deal.Close — the conditional close gate: all 4 conditions must be green or the
+--                  choice aborts. Nonconsuming so the demo is re-runnable.
 
 module Atrium.DealRoom where
 
@@ -18,40 +18,94 @@ import DA.Time (hours, days, addRelTime)
 import DA.Assert ((===))
 import DA.Optional (isSome)
 
+-- An investor's locked cBTC commitment toward the fundraise. Co-signed by the registry
+-- (admin) so it is unforgeable and backed by an on-ledger Holding. The founder (= seller)
+-- observes every commitment so the Deal.Close gate can fetch + sum them.
+template Commitment
+  with
+    admin       : Party
+    investor    : Party
+    founder     : Party
+    dealId      : Text
+    amount      : Decimal
+    committedAt : Time
+  where
+    signatory investor, admin
+    observer founder
+
+-- An approval from a governance or compliance role. Signed by the approver alone;
+-- the founder observes it so the Deal.Close gate can fetch and verify all required roles.
+template Approval
+  with
+    approver   : Party
+    role       : Text
+    dealId     : Text
+    approvedAt : Time
+    founder    : Party
+  where
+    signatory approver
+    observer founder
+
 template Deal
   with
-    seller : Party
-    dealId : Text
-    title : Text
-    instrument : Text     -- the asset being sold, e.g. "HALDEN-EQUITY"
-    quantity : Decimal     -- units of the stake on offer
+    seller            : Party
+    dealId            : Text
+    title             : Text
+    instrument        : Text
+    quantity          : Decimal
+    raiseTarget       : Decimal
+    requiredApprovals : [Text]
   where
     signatory seller
 
+    -- On-ledger conditional close gate. All four conditions must be satisfied or the
+    -- choice aborts and nothing moves. Nonconsuming so the demo state is re-runnable.
+    nonconsuming choice Close : ()
+      with
+        winnerOffer    : ContractId Offer
+        kycCid         : ContractId KYCAttestation
+        approvalCids   : [ContractId Approval]
+        commitmentCids : [ContractId Commitment]
+      controller seller
+      do
+        offer <- fetch winnerOffer
+        assertMsg "offer must be for this deal" (offer.dealId == dealId)
+        kyc <- fetch kycCid
+        assertMsg "KYC must name the winning investor" (kyc.subject == offer.buyer)
+        assertMsg "KYC relying party must be the founder" (kyc.relyingParty == seller)
+        now <- getTime
+        assertMsg "KYC attestation has expired" (now <= kyc.expiresAt)
+        approvals <- mapA fetch approvalCids
+        let approvedRoles = map (\a -> a.role) approvals
+        _ <- mapA (\r -> assertMsg ("Missing approval from: " <> r) (elem r approvedRoles)) requiredApprovals
+        commitments <- mapA fetch commitmentCids
+        let totalCommitted = foldl (\acc c -> acc + c.amount) 0.0 commitments
+        assertMsg ("Raise target " <> show raiseTarget <> " cBTC not met; committed: " <> show totalCommitted) (totalCommitted >= raiseTarget)
+        pure ()
+
 template Document
   with
-    seller : Party
-    dealId : Text
-    docId : Text
-    title : Text
-    tier : Int            -- 1 = teaser tier, 2 = deep diligence tier
-    contentHash : Text     -- sha256 of the ciphertext
-    blobPointer : Text     -- pointer into the off-chain encrypted store
+    seller      : Party
+    dealId      : Text
+    docId       : Text
+    title       : Text
+    tier        : Int
+    contentHash : Text
+    blobPointer : Text
   where
     signatory seller
 
 template AccessGrant
   with
-    seller : Party
-    buyer : Party
-    dealId : Text
-    maxTier : Int          -- buyer may access documents up to this tier
+    seller    : Party
+    buyer     : Party
+    dealId    : Text
+    maxTier   : Int
     grantedAt : Time
   where
     signatory seller
     observer buyer
 
-    -- Buyer-initiated, seller-signed: unforgeable, ledger-timestamped access record.
     nonconsuming choice RecordAccess : ContractId AccessEvent
       with docId : Text
       controller buyer
@@ -65,30 +119,24 @@ template AccessGrant
 
 template AccessEvent
   with
-    seller : Party
-    buyer : Party
-    dealId : Text
-    docId : Text
+    seller     : Party
+    buyer      : Party
+    dealId     : Text
+    docId      : Text
     accessedAt : Time
   where
     signatory seller
     observer buyer
-    -- Production: add an optional Regulator observer for supervisory visibility.
 
--- A KYC/KYB attestation issued by an independent provider. The institutional gate: a
--- buyer cannot be settled with unless a current attestation names them. Signatory is the
--- provider (unforgeable); the subject and the relying party (the seller/operator) observe
--- it so the relying party can verify it on-ledger at the close — without ever seeing the
--- underlying KYC documents (those stay with the provider, off-ledger).
 template KYCAttestation
   with
-    kycProvider : Party
-    subject : Party        -- the verified party (a buyer)
-    relyingParty : Party   -- who may rely on this attestation (the seller / deal operator)
-    level : Text           -- e.g. "KYB-INSTITUTIONAL", "KYC-RETAIL"
-    jurisdiction : Text    -- e.g. "US", "EU"
-    issuedAt : Time
-    expiresAt : Time
+    kycProvider  : Party
+    subject      : Party
+    relyingParty : Party
+    level        : Text
+    jurisdiction : Text
+    issuedAt     : Time
+    expiresAt    : Time
   where
     signatory kycProvider
     observer subject, relyingParty
@@ -99,28 +147,23 @@ template KYCAttestation
 
 template Offer
   with
-    buyer : Party
-    seller : Party
-    dealId : Text
+    buyer        : Party
+    seller       : Party
+    dealId       : Text
     pricePerUnit : Decimal
-    quantity : Decimal
-    submittedAt : Time
+    quantity     : Decimal
+    submittedAt  : Time
   where
     signatory buyer
-    observer seller    -- visible to seller only; rival buyers never see it
+    observer seller
 
-    -- Accepting marks the winning offer. It REQUIRES a current KYC attestation naming the
-    -- bidder — no settlement with an unverified counterparty. The close itself (payment vs
-    -- ownership, atomic) is then orchestrated by the executor app against Atrium.Dvp.
-    -- kycCid is Optional so the choice stays smart-contract-upgrade compatible (Canton 3.x
-    -- requires added choice fields to be Optional); None is rejected at runtime — KYC is required.
     choice Accept : ()
       with kycCid : Optional (ContractId KYCAttestation)
       controller seller
       do
         cid <- case kycCid of
           Some c -> pure c
-          None -> abort "a KYC attestation is required to accept"
+          None   -> abort "a KYC attestation is required to accept"
         kyc <- fetch cid
         assertMsg "KYC attestation must name this bidder as subject" (kyc.subject == buyer)
         assertMsg "KYC attestation must name the seller as relying party" (kyc.relyingParty == seller)
@@ -132,23 +175,20 @@ template Offer
       controller buyer
       do pure ()
 
--- Seeds a demo deal: 2 documents across 2 tiers, two buyers on different tiers,
--- a couple of recorded accesses, and one offer. Useful for local exploration.
 setupDemo : Script ()
 setupDemo = script do
-  seller <- allocateParty "Halden"      -- the seller (Halden Robotics)
-  buyerA <- allocateParty "Boranic"     -- strategic acquirer, tier 1 only
-  buyerB <- allocateParty "Meridian"    -- friendly fund, tier 1 + 2
-  kyc    <- allocateParty "KYCProvider" -- independent KYC/KYB attestor
+  seller   <- allocateParty "Halden"
+  buyerA   <- allocateParty "Boranic"
+  buyerB   <- allocateParty "Meridian"
+  kyc      <- allocateParty "KYCProvider"
   now <- getTime
   let dealId = "HALDEN-2026-A"
 
-  -- Both buyers are KYC/KYB-cleared by the provider, relying party = the seller.
   _ <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerA, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
   _ <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
 
-  _ <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Robotics — 12% secondary", instrument = "HALDEN-EQUITY", quantity = 120000.0)
-  _ <- submit seller do createCmd (Document with seller, dealId, docId = "teaser",     title = "Investment teaser",    tier = 1, contentHash = "sha256:aa11", blobPointer = "s3://atrium/halden/teaser.enc")
+  _ <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Robotics — 25 cBTC Series A", instrument = "HALDEN-EQUITY", quantity = 120000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"])
+  _ <- submit seller do createCmd (Document with seller, dealId, docId = "teaser",     title = "Investment teaser",  tier = 1, contentHash = "sha256:aa11", blobPointer = "s3://atrium/halden/teaser.enc")
   _ <- submit seller do createCmd (Document with seller, dealId, docId = "financials", title = "Audited financials", tier = 2, contentHash = "sha256:bb22", blobPointer = "s3://atrium/halden/financials.enc")
 
   grantA <- submit seller do createCmd (AccessGrant with seller, buyer = buyerA, dealId, maxTier = 1, grantedAt = now)
@@ -161,39 +201,31 @@ setupDemo = script do
   _ <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = addRelTime now (hours 1))
   pure ()
 
--- Proof: the privacy half. The differentiator is that the SAME deal projects
--- differently per party — rivals are invisible, and every disclosure is scoped.
--- Where Dvp.daml proves the atomic close, this proves selective disclosure: the
--- claim in docs (each buyer sees only their tier; rivals never see each other)
--- becomes a ledger-verified assertion rather than prose.
+-- Proof 1: selective disclosure. The same deal projects differently per party — rivals are
+-- invisible, and every disclosure is scoped by the ledger, not by the application.
 testPrivacyProjection : Script ()
 testPrivacyProjection = script do
   seller <- allocateParty "Halden"
-  buyerA <- allocateParty "Boranic"    -- strategic acquirer, tier 1
-  buyerB <- allocateParty "Meridian"   -- friendly fund, tier 2
+  buyerA <- allocateParty "Boranic"
+  buyerB <- allocateParty "Meridian"
   now <- getTime
   let dealId = "HALDEN-2026-A"
 
   grantA <- submit seller do createCmd (AccessGrant with seller, buyer = buyerA, dealId, maxTier = 1, grantedAt = now)
   grantB <- submit seller do createCmd (AccessGrant with seller, buyer = buyerB, dealId, maxTier = 2, grantedAt = now)
 
-  -- buyerB bids. Offer is observed by the seller only.
   offerCid <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = now)
 
-  -- 1. Rivals are invisible: buyerA cannot see buyerB's bid; the seller can.
   offerForA <- queryContractId buyerA offerCid
   offerForA === None
   offerForSeller <- queryContractId seller offerCid
   assertMsg "seller must see the offer" (isSome offerForSeller)
 
-  -- 2. Grants are scoped per buyer: neither buyer sees the other's grant.
   gB_forA <- queryContractId buyerA grantB
   gB_forA === None
   gA_forB <- queryContractId buyerB grantA
   gA_forB === None
 
-  -- 3. The access trail is scoped: buyerB's recorded access is visible to
-  --    buyerB and the seller, never to the rival buyerA.
   evCid <- submit buyerB do exerciseCmd grantB (RecordAccess with docId = "financials")
   evForA <- queryContractId buyerA evCid
   evForA === None
@@ -204,9 +236,7 @@ testPrivacyProjection = script do
 
   pure ()
 
--- Proof: the compliance gate. A bid can only be accepted with a current KYC attestation
--- naming the bidder — and a wrong-subject or expired attestation is rejected. This is the
--- institutional line: no settlement with an unverified counterparty.
+-- Proof 2: KYC compliance gate. A bid can only be accepted with a current attestation.
 testKYCGate : Script ()
 testKYCGate = script do
   seller <- allocateParty "Halden"
@@ -218,19 +248,49 @@ testKYCGate = script do
 
   offer <- submit buyerB do createCmd (Offer with buyer = buyerB, seller, dealId, pricePerUnit = 35.0, quantity = 120000.0, submittedAt = now)
 
-  -- No attestation at all (None) is rejected — KYC is required.
   submitMustFail seller do exerciseCmd offer (Accept with kycCid = None)
 
-  -- An attestation for the WRONG subject cannot be used to accept buyerB's bid.
   wrongAtt <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = rival, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
   submitMustFail seller do exerciseCmd offer (Accept with kycCid = Some wrongAtt)
 
-  -- An EXPIRED attestation for the right subject is rejected.
   expiredAtt <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = addRelTime now (days (-400)), expiresAt = addRelTime now (days (-1)))
   submitMustFail seller do exerciseCmd offer (Accept with kycCid = Some expiredAtt)
 
-  -- A current attestation naming buyerB clears the close.
   goodAtt <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
   submit seller do exerciseCmd offer (Accept with kycCid = Some goodAtt)
+
+  pure ()
+
+-- Proof 3: the conditional close gate. All four conditions must be green or the close
+-- aborts. Mirrors the real demo: investors commit cBTC, board/legal/compliance sign,
+-- then the founder closes — all enforced on-ledger, not just by the UI.
+testConditionalClose : Script ()
+testConditionalClose = script do
+  seller   <- allocateParty "Halden"
+  investor <- allocateParty "Meridian"
+  admin    <- allocateParty "Registry"
+  board    <- allocateParty "Board"
+  legal    <- allocateParty "Legal"
+  kycp     <- allocateParty "KYCProvider"
+  now      <- getTime
+  let dealId = "HALDEN-2026-A"
+
+  dealCid   <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Series A", instrument = "HALDEN-EQUITY", quantity = 1000000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"])
+  commitCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, amount = 25.0, committedAt = now)
+  offerCid  <- submit investor do createCmd (Offer with buyer = investor, seller, dealId, pricePerUnit = 25.0, quantity = 1000000.0, submittedAt = now)
+  kycCid    <- submit kycp do createCmd (KYCAttestation with kycProvider = kycp, subject = investor, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
+  boardApp  <- submit board do createCmd (Approval with approver = board, role = "BOARD",      dealId, approvedAt = now, founder = seller)
+  legalApp  <- submit legal do createCmd (Approval with approver = legal, role = "LEGAL",      dealId, approvedAt = now, founder = seller)
+  kycApp    <- submit kycp  do createCmd (Approval with approver = kycp,  role = "COMPLIANCE", dealId, approvedAt = now, founder = seller)
+
+  -- MUST FAIL: only Board approved — LEGAL and COMPLIANCE still missing
+  submitMustFail seller do exerciseCmd dealCid (Close with winnerOffer = offerCid, kycCid, approvalCids = [boardApp], commitmentCids = [commitCid])
+
+  -- MUST FAIL: all approvals present but only 10 cBTC committed; target is 25
+  lowCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, amount = 10.0, committedAt = now)
+  submitMustFail seller do exerciseCmd dealCid (Close with winnerOffer = offerCid, kycCid, approvalCids = [boardApp, legalApp, kycApp], commitmentCids = [lowCid])
+
+  -- SUCCEED: all 4 conditions green (KYC + 3 approvals + >=25 cBTC committed)
+  submit seller do exerciseCmd dealCid (Close with winnerOffer = offerCid, kycCid, approvalCids = [boardApp, legalApp, kycApp], commitmentCids = [commitCid])
 
   pure ()

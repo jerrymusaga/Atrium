@@ -16,6 +16,10 @@ export interface LedgerClient {
   inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId>
   // Buyer submits a bid (price per unit; quantity defaults to the whole stake on offer).
   submitOffer(viewer: PartyId, pricePerUnit: number): Promise<void>
+  // Investor locks cBTC toward the raise (creates on-ledger Commitment).
+  commitCBTC(viewer: PartyId, amount: number): Promise<void>
+  // Governance role (Board / Legal / Compliance) approves the close.
+  approve(viewer: PartyId, role: string): Promise<void>
   // Open a document: the key service releases the decryption key and returns the plaintext ONLY
   // if the ledger confirms the viewer's grant covers the tier (else it throws "Sealed…"). An
   // authorized open also appends an AccessEvent — the audit trail logs every real decryption.

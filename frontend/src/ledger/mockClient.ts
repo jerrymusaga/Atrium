@@ -137,6 +137,9 @@ export const mockClient: LedgerClient = {
     return name
   },
 
+  async commitCBTC(_viewer: PartyId, _amount: number) { await wait(150) },
+  async approve(_viewer: PartyId, _role: string) { await wait(150) },
+
   // Buyer submits a bid for the whole stake on offer. Visible to the seller only.
   async submitOffer(viewer: PartyId, pricePerUnit: number) {
     const me = VIEWERS.find((v) => v.party === viewer)

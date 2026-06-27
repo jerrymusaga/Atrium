@@ -109,7 +109,7 @@ testAtomicDvP = script do
   now <- getTime
   let ref = "DEAL-001"
 
-  buyerCash    <- submit registry do createCmd (Holding with admin = registry, owner = buyer,  instrument = "USD-CASH",       amount = 4200000.0)
+  buyerCash    <- submit registry do createCmd (Holding with admin = registry, owner = buyer,  instrument = "cBTC",           amount = 4200000.0)
   sellerEquity <- submit registry do createCmd (Holding with admin = registry, owner = seller, instrument = "HALDEN-EQUITY", amount = 120000.0)
   factory <- submit registry do createCmd (AllocationFactory with admin = registry, users = [buyer, seller])
   coord   <- submit operator do createCmd (SettlementCoordinator with executor = operator, settlementRef = ref, settleBefore = addRelTime now (hours 24))
@@ -137,7 +137,7 @@ testAtomicityHolds = script do
   now <- getTime
   let ref = "DEAL-002"
 
-  buyerCash    <- submit registry do createCmd (Holding with admin = registry, owner = buyer,  instrument = "USD-CASH",       amount = 4200000.0)
+  buyerCash    <- submit registry do createCmd (Holding with admin = registry, owner = buyer,  instrument = "cBTC",           amount = 4200000.0)
   sellerEquity <- submit registry do createCmd (Holding with admin = registry, owner = seller, instrument = "HALDEN-EQUITY", amount = 120000.0)
   factory <- submit registry do createCmd (AllocationFactory with admin = registry, users = [buyer, seller])
   coord   <- submit operator do createCmd (SettlementCoordinator with executor = operator, settlementRef = ref, settleBefore = addRelTime now (hours 24))
@@ -149,8 +149,8 @@ testAtomicityHolds = script do
 
   submitMustFail operator do exerciseCmd coord (Settle with cashLeg = cashAlloc, ownershipLeg = ownershipAlloc)
 
-  Some _ <- queryContractId operator cashAlloc   -- cash still locked
+  Some _ <- queryContractId operator cashAlloc   -- cBTC still locked
   sellerHoldings <- query @Holding seller
-  let cashToSeller = [ h | (_, h) <- sellerHoldings, h.instrument == "USD-CASH" ]
-  assertMsg "no cash should have reached the seller" (null cashToSeller)
+  let cashToSeller = [ h | (_, h) <- sellerHoldings, h.instrument == "cBTC" ]
+  assertMsg "no cBTC should have reached the seller" (null cashToSeller)
   pure ()

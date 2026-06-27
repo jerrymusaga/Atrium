@@ -417,3 +417,29 @@ body {
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--seal); color: #1a1206; padding: 11px 18px; border-radius: 10px; font-size: 13px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---- Conditions panel (Phase 1 — conditional close gate) ---- */
+.conditions-bar-wrap { position: relative; height: 8px; background: var(--raised); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; margin: 0 0 8px; }
+.conditions-bar { height: 100%; background: var(--steel-dim); transition: width .6s ease, background .3s; border-radius: 20px; }
+.conditions-bar-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 14px; }
+
+.conditions-list { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 8px; }
+.cond-item { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--raised); }
+.cond-done { border-color: var(--settled) !important; }
+.cond-done .cond-check { color: var(--settled); }
+.cond-pending .cond-check { color: var(--muted); }
+.cond-check { font-size: 14px; width: 18px; flex-shrink: 0; }
+.cond-label { flex: 1; color: var(--text); }
+.cond-detail { color: var(--muted); font-size: 11px; }
+
+/* ---- cBTC commit panel ---- */
+.commit-status { display: flex; align-items: baseline; gap: 10px; padding: 14px 0; }
+.commit-amt { font-size: 22px; color: var(--settled); letter-spacing: -.5px; }
+.commit-label { color: var(--muted); font-size: 12px; }
+
+/* ---- Approver panel ---- */
+.panel-approver { border-color: var(--steel-dim); }
+
+/* ---- chip variant (conditions header) ---- */
+.chip { font-size: 11px; letter-spacing: .5px; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+.chip.settled { border-color: var(--settled); color: var(--settled); }

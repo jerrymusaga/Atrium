@@ -2,41 +2,32 @@
 //
 // Holds no secrets of its own: it resolves the demo parties on the ledger, serves each
 // caller a view SCOPED BY THE LEDGER (selective disclosure is enforced by Canton, not by
-// filtering here), drives RecordAccess / Accept as the acting party, and runs the atomic
-// payment-vs-ownership close via the Atrium.Dvp settlement coordinator.
-//
-// Runs today against `daml sandbox --json-api-port 7575` (no Docker). Point LEDGER_API_URL
-// + LEDGER_TOKEN at LocalNet for Stage 3; the Dvp leg swaps for the real Splice registry.
+// filtering here), drives RecordAccess / Accept / Close as the acting party, and runs
+// the atomic payment-vs-ownership close via the Atrium.Dvp settlement coordinator.
 
-import './env.js' // load backend/.env first (mirrors ledgerApi; safe if already loaded)
+import './env.js'
 import express from 'express'
 import {
-  activeContracts, allocatePartyByHint, create, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
+  activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
 import { decryptDocument, docMeta, loadVault, registerDocument, seedVault } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
 app.use(express.json())
-loadVault() // restore previously-uploaded encrypted documents from disk…
-seedVault() // …then ensure the demo documents exist; keys are held by this key service
+loadVault()
+seedVault()
 
-// readable demo handles → resolved at request time to full party ids on the ledger
 const SELLER = 'Halden'
 const DEAL_ID = 'HALDEN-2026-A'
 
-// Party namespacing. On the local sandbox parties are bare ("Halden"). On a SHARED hosted
-// validator (Seaport) names collide across teams, so we prefix our hints (PARTY_PREFIX, e.g.
-// "atrium-"). Logical names ("Halden"/"Boranic") flow through the API and UI either way.
 const PARTY_PREFIX = process.env.PARTY_PREFIX ?? ''
 const hint = (logical: string) => `${PARTY_PREFIX}${logical}`
-// Does a full party id (local-part::namespace) correspond to this logical name?
 function matchesLogical(full: string, logical: string): boolean {
   const local = full.split('::')[0]
   const h = hint(logical)
-  return local === h || local.startsWith(h + '-') // sandbox appends "-<hash>"; hosted doesn't
+  return local === h || local.startsWith(h + '-')
 }
-// Invert: full party id → logical display name (strip namespace, prefix, and any "-<hash>").
 function displayName(full: string): string {
   let local = full.split('::')[0]
   if (PARTY_PREFIX && local.startsWith(PARTY_PREFIX)) local = local.slice(PARTY_PREFIX.length)
@@ -44,14 +35,8 @@ function displayName(full: string): string {
   return m ? m[1] : local
 }
 
-// Should the executor grant its ledger user CanActAs on parties it acts as? Needed on hosted
-// validators (the token is one user); the sandbox's admin user doesn't need it.
 const GRANT_ACT_AS = process.env.LEDGER_GRANT_ACT_AS === '1'
 
-// A REAL external party on ANOTHER validator (a teammate's Loop-wallet party), acting with ITS
-// OWN token. When this party views the deal we read from THEIR validator with THEIR credentials —
-// the ledger, not our app, enforces their identity. This is the cross-validator proof; until it's
-// configured the demo runs entirely on the operator's validator. See docs/SEAPORT.md.
 const REMOTE = (process.env.REMOTE_PARTY && process.env.REMOTE_LEDGER_API_URL)
   ? {
       label: process.env.REMOTE_PARTY_LABEL || 'Guest',
@@ -70,8 +55,6 @@ const REMOTE = (process.env.REMOTE_PARTY && process.env.REMOTE_LEDGER_API_URL)
     }
   : null
 
-// Package id of the atrium DAR. Prefer an explicit env (works before any contract exists, e.g.
-// a freshly-seeded hosted ledger); otherwise learn it from any on-ledger contract.
 let PKG: string | null = process.env.ATRIUM_PKG ?? null
 const DVP_ENTITIES = new Set(['Holding', 'Allocation', 'AllocationFactory', 'SettlementCoordinator'])
 const EQUITY_ENTITIES = new Set(['ShareCertificate'])
@@ -88,9 +71,6 @@ async function ensurePkg(): Promise<void> {
   PKG = any.templateId.split(':')[0]
 }
 
-// On a hosted validator every party shares the participant's namespace fingerprint, so we can
-// construct full ids directly (PARTY_NAMESPACE) instead of scanning the 10k-party list. Resolved
-// ids are cached per logical name. Falls back to listing when no namespace is configured (sandbox).
 const PARTY_NAMESPACE = process.env.PARTY_NAMESPACE ?? ''
 const partyCache = new Map<string, string>()
 
@@ -108,12 +88,11 @@ async function partyId(logical: string): Promise<string> {
   return hit
 }
 
-// Resolve-or-allocate a logical party, and (on hosted validators) ensure our user can act as it.
 async function ensureParty(logical: string): Promise<string> {
   let party: string
   if (PARTY_NAMESPACE) {
     party = `${hint(logical)}::${PARTY_NAMESPACE}`
-    try { await allocatePartyByHint(hint(logical)) } catch { /* already allocated — fine */ }
+    try { await allocatePartyByHint(hint(logical)) } catch { /* already allocated */ }
   } else {
     const existing = (await listParties()).find((p) => matchesLogical(p, logical))
     party = existing ?? (await allocatePartyByHint(hint(logical)))
@@ -126,9 +105,6 @@ async function ensureParty(logical: string): Promise<string> {
 const num = (s: any) => Number(s)
 const labelFor = displayName
 
-// Active contracts for a party, scoped to OUR package version. On a shared validator the
-// seller may also hold contracts from older package ids (prior demos); the app operates only
-// on the current package so views and the seed stay clean.
 async function acsOf(party: string, conn: Conn = defaultConn): Promise<CreatedEvent[]> {
   const all = await activeContracts(party, conn)
   return PKG ? all.filter((c) => c.templateId.startsWith(PKG + ':')) : all
@@ -140,40 +116,34 @@ app.get('/deals/:dealId/view', async (req, res) => {
   try {
     await ensurePkg()
     const prefix = String(req.query.party ?? '')
-    if (!prefix) return res.status(400).json({ error: 'Pass ?party=Halden|Boranic|Meridian' })
+    if (!prefix) return res.status(400).json({ error: 'Pass ?party=Halden|Boranic|Meridian|Board|Legal|KYCProvider' })
     const isSeller = prefix === SELLER
-    // A real external party reads its OWN projection from ITS OWN validator with ITS OWN token.
     const remote = REMOTE && prefix === REMOTE.label ? REMOTE : null
     const party = remote ? remote.party : await partyId(prefix)
 
-    const mine = remote ? await acsOf(party, remote.conn) : await acsOf(party) // ledger-scoped to THIS party
+    const mine = remote ? await acsOf(party, remote.conn) : await acsOf(party)
     const byEntity = (e: string) => mine.filter((c) => entityOf(c.templateId) === e)
 
-    // Shared deal context (index of the room). Documents/Deal are seller-signatory, so the
-    // executor reads the manifest as the seller; CONTENTS/hash access stay gated below.
     const seller = await partyId(SELLER)
     const sellerView = isSeller ? mine : await acsOf(seller)
     const dealC = sellerView.find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
     const docManifest = sellerView.filter((c) => entityOf(c.templateId) === 'Document').map((c) => c.createArgument)
 
-    // This party's granted tier (0 = no grant). Read straight from their AccessGrant on-ledger.
     const myGrant = byEntity('AccessGrant')[0]?.createArgument
     const maxTier = isSeller ? 99 : (myGrant ? num(myGrant.maxTier) : 0)
 
     const documents = docManifest.map((d: any) => ({
       docId: d.docId, title: d.title, tier: num(d.tier),
-      contentHash: docMeta(d.docId)?.hash ?? d.contentHash, // the real ciphertext hash from the vault
+      contentHash: docMeta(d.docId)?.hash ?? d.contentHash,
       accessible: isSeller || maxTier >= num(d.tier),
     }))
 
-    // Sensitive projections — taken DIRECTLY from the party's own active contract set.
     const accessTrail = byEntity('AccessEvent').map((c) => {
       const a = c.createArgument
       const doc = docManifest.find((d: any) => d.docId === a.docId)
       return { buyer: a.buyer, buyerLabel: labelFor(a.buyer), docId: a.docId, docTitle: doc?.title ?? a.docId, accessedAt: String(a.accessedAt).slice(11, 16) }
     })
-    // KYC/KYB attestations (provider-signed; relying party = seller, so they're in the seller
-    // view). A bid is "cleared" only with a current attestation naming the bidder.
+
     const atts = sellerView.filter((c) => entityOf(c.templateId) === 'KYCAttestation').map((c) => c.createArgument)
     const attFor = (full: string) => atts.find((a) => a.subject === full && Date.parse(a.expiresAt) > Date.now())
     const kycOf = (full: string) => { const a = attFor(full); return a ? { level: a.level, jurisdiction: a.jurisdiction } : null }
@@ -182,36 +152,60 @@ app.get('/deals/:dealId/view', async (req, res) => {
       const o = c.createArgument
       return { offerId: c.contractId, buyer: o.buyer, buyerLabel: labelFor(o.buyer), pricePerUnit: num(o.pricePerUnit), quantity: num(o.quantity), submittedAt: String(o.submittedAt).slice(11, 16), status: 'open' as const, kyc: kycOf(o.buyer) }
     })
-    // The DvP legs live as Holdings whose admin is the Registry (it sees both). Read them there
-    // so the close panel shows both sides; `settled` is derived from on-ledger ownership: once
-    // the cash leg is owned by the seller, the atomic swap has happened.
+
     const registry = await partyId('Registry')
     const regAcs = await acsOf(registry)
     const regHoldings = regAcs.filter((c) => entityOf(c.templateId) === 'Holding').map((c) => c.createArgument)
     const holdings = regHoldings.map((h: any) => ({ owner: h.owner, ownerLabel: labelFor(h.owner), instrument: h.instrument, amount: num(h.amount) }))
-    const settled = regHoldings.some((h: any) => h.instrument === 'USD-CASH' && labelFor(h.owner) === SELLER)
+    const settled = regHoldings.some((h: any) => h.instrument === 'cBTC' && labelFor(h.owner) === SELLER)
 
-    // The cap table (share registry). Seller/regulator see the whole table; a buyer sees only
-    // their own line — the registry is itself privacy-scoped. After the close, the buyer's 12%
-    // appears because the on-offer stake transferred on settlement.
     const certs = regAcs.filter((c) => entityOf(c.templateId) === 'ShareCertificate').map((c) => c.createArgument)
     const totalShares = certs.reduce((s, c: any) => s + num(c.shares), 0) || 1
     const capRow = (c: any) => ({ holderLabel: labelFor(c.holder), shares: num(c.shares), pct: Math.round((num(c.shares) / totalShares) * 1000) / 10 })
     const capTable = (isSeller ? certs : certs.filter((c: any) => c.holder === party)).map(capRow).sort((a, b) => b.shares - a.shares)
 
+    // Conditions panel (for the founder / seller lens)
+    let conditions: any = undefined
+    if (isSeller && dealC) {
+      const raiseTarget = num(dealC.raiseTarget ?? 0)
+      const commitments = sellerView.filter((c) => entityOf(c.templateId) === 'Commitment')
+      const approvals = sellerView.filter((c) => entityOf(c.templateId) === 'Approval')
+      const totalCommitted = commitments.reduce((sum, c) => sum + num(c.createArgument.amount), 0)
+      const percentFunded = raiseTarget > 0 ? Math.min(100, Math.round((totalCommitted / raiseTarget) * 100)) : 0
+      const approvalMap = Object.fromEntries(approvals.map((c) => [c.createArgument.role, c]))
+      const conditionsList = [
+        { key: 'FUNDED',      label: `Raise target (${raiseTarget} cBTC)`, done: totalCommitted >= raiseTarget, detail: `${totalCommitted} / ${raiseTarget} cBTC` },
+        { key: 'BOARD',       label: 'Board approval',       done: !!approvalMap['BOARD'],       approvedAt: approvalMap['BOARD']?.createArgument.approvedAt?.slice(11, 16) },
+        { key: 'LEGAL',       label: 'Legal approval',       done: !!approvalMap['LEGAL'],       approvedAt: approvalMap['LEGAL']?.createArgument.approvedAt?.slice(11, 16) },
+        { key: 'COMPLIANCE',  label: 'Compliance / KYC',     done: !!approvalMap['COMPLIANCE'],  approvedAt: approvalMap['COMPLIANCE']?.createArgument.approvedAt?.slice(11, 16) },
+      ]
+      conditions = {
+        raiseTarget, totalCommitted, percentFunded,
+        conditions: conditionsList,
+        allGreen: conditionsList.every((c) => c.done),
+        commitmentCids: commitments.map((c) => c.contractId),
+        approvalCids: approvals.map((c) => c.contractId),
+      }
+    }
+
+    // Commitment for a buyer lens
+    const myCommitmentC = !isSeller ? byEntity('Commitment')[0] : null
+    const myCommitment = myCommitmentC ? { amount: num(myCommitmentC.createArgument.amount), committedAt: String(myCommitmentC.createArgument.committedAt).slice(11, 16) } : null
+
+    // Approval for a governance role lens
+    const myApprovalC = byEntity('Approval')[0]
+    const myApproval = myApprovalC ? { role: myApprovalC.createArgument.role, approvedAt: String(myApprovalC.createArgument.approvedAt).slice(11, 16) } : null
+
     res.json({
-      deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity) } : null,
+      deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity), raiseTarget: num(dealC.raiseTarget ?? 0) } : null,
       documents, accessTrail, offers, holdings, capTable, settled,
-      kyc: isSeller ? null : kycOf(party), // the viewing buyer's own clearance
+      kyc: isSeller ? null : kycOf(party),
+      conditions, myCommitment, myApproval,
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
 // --- open a document: the KEY-RELEASE GATE ---
-// The key service releases the decryption key (and returns the plaintext) ONLY if the ledger
-// confirms the requester's AccessGrant covers the document's tier. Authorized opens append an
-// immutable AccessEvent — so the audit trail logs every actual decryption. The bytes are decrypted
-// off-ledger; Canton only ever held the hash + pointer + grant.
 app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
   try {
     await ensurePkg()
@@ -227,15 +221,13 @@ app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
       if (tier < meta.tier) {
         return res.status(403).json({ error: `Sealed. Your grant covers tier ${tier}; "${meta.title}" is tier ${meta.tier}. The key service will not release the key.`, sealed: true, tier: meta.tier })
       }
-      if (grant) await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId }) // log the decryption on-ledger
+      if (grant) await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId })
     }
     res.json({ docId, title: meta.title, tier: meta.tier, hash: meta.hash, bytes: meta.bytes, content: decryptDocument(docId) })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- seller uploads a document at ANY tier (dynamic data room, N tiers) ---
-// Encrypt it off-ledger in the vault; record only the hash + pointer + tier on-ledger as a
-// Document (seller-signatory). Buyers granted >= that tier can later decrypt it.
+// --- seller uploads a document at ANY tier ---
 app.post('/deals/:dealId/documents', async (req, res) => {
   try {
     await ensurePkg()
@@ -254,10 +246,7 @@ app.post('/deals/:dealId/documents', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- the diligence copilot: privacy-bounded AI ---
-// The model receives ONLY the documents this party's on-ledger grant authorizes (same gate as
-// the key service). So it can't answer about a tier the caller can't see — it never gets those
-// bytes. Privacy is enforced at retrieval, not by asking the model to behave.
+// --- diligence copilot: privacy-bounded AI ---
 const DOC_IDS = ['teaser', 'financials']
 app.post('/deals/:dealId/ask', async (req, res) => {
   try {
@@ -273,19 +262,83 @@ app.post('/deals/:dealId/ask', async (req, res) => {
       const grant = (await acsOf(party)).find((c) => entityOf(c.templateId) === 'AccessGrant')
       tier = grant ? num(grant.createArgument.maxTier) : 0
     }
-    // Gather ONLY the authorized documents — exactly what the ledger would release keys for.
     const authorized = DOC_IDS.map((id) => ({ id, meta: docMeta(id) })).filter((d) => d.meta && tier >= d.meta.tier)
     const context = authorized.map((d) => `### ${d.meta!.title} (Tier ${d.meta!.tier})\n${decryptDocument(d.id)}`).join('\n\n')
 
-    const system = `You are the diligence copilot inside Atrium, a private M&A data room on Canton Network.
+    const system = `You are the diligence copilot inside Atrium, a private capital markets OS on Canton Network.
 You are answering for the party "${prefix}". You may ONLY use the documents below — they are EXACTLY what this party's on-ledger access grant authorizes. Do not use outside knowledge and never invent figures.
-If the question needs information that is not in these documents (it lives in a higher access tier this party was not granted), say so plainly: state which tier it likely sits in and that their grant does not cover it. Be concise and cite the specific figures you use.
+If the question needs information not in these documents (it lives in a higher access tier this party was not granted), say so plainly: state which tier it likely sits in and that their grant does not cover it. Be concise and cite the specific figures you use.
 
 AUTHORIZED DOCUMENTS:
 ${context || '(none — this party has no document access)'}`
 
     const answer = await chat(system, String(question))
     res.json({ answer, authorizedDocs: authorized.map((d) => d.meta!.title), tier: isSeller ? 'all tiers' : `tier ${tier}` })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- investor commits cBTC toward the raise ---
+// Creates a Commitment contract (co-signed by investor + registry as admin) that the
+// Deal.Close gate will fetch and sum against the raiseTarget.
+app.post('/deals/:dealId/commit', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, amount } = req.body ?? {}
+    if (!prefix) return res.status(400).json({ error: 'party required' })
+    const cbtc = Number(amount)
+    if (!(cbtc > 0)) return res.status(400).json({ error: 'amount must be > 0' })
+    const investor = await partyId(prefix)
+    const founder  = await partyId(SELLER)
+    const admin    = await partyId('Registry')
+    const now = new Date().toISOString()
+    await createMulti([investor, admin], tid('Commitment'), { admin, investor, founder, dealId: DEAL_ID, amount: cbtc.toFixed(4), committedAt: now })
+    res.json({ committed: true, amount: cbtc })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- governance approvals (Board / Legal / Compliance) ---
+// Each role creates an Approval contract (signatory = approver, observer = founder) that
+// the Deal.Close gate fetches to verify every required role has signed off.
+app.post('/deals/:dealId/approve', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, role } = req.body ?? {}
+    if (!prefix || !role) return res.status(400).json({ error: 'party and role required' })
+    const validRoles = ['BOARD', 'LEGAL', 'COMPLIANCE']
+    if (!validRoles.includes(String(role).toUpperCase())) return res.status(400).json({ error: `role must be one of ${validRoles.join(', ')}` })
+    const approver = await partyId(prefix)
+    const founder  = await partyId(SELLER)
+    const now = new Date().toISOString()
+    await create(approver, tid('Approval'), { approver, role: String(role).toUpperCase(), dealId: DEAL_ID, approvedAt: now, founder })
+    res.json({ approved: true, role: String(role).toUpperCase() })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- deal readiness: raise progress + approval states ---
+app.get('/deals/:dealId/conditions', async (req, res) => {
+  try {
+    await ensurePkg()
+    const seller = await partyId(SELLER)
+    const sellerAcs = await acsOf(seller)
+    const dealC = sellerAcs.find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    if (!dealC) return res.status(404).json({ error: 'Deal not found — seed first' })
+    const raiseTarget = num(dealC.raiseTarget ?? 0)
+    const commitments = sellerAcs.filter((c) => entityOf(c.templateId) === 'Commitment')
+    const approvals = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval')
+    const totalCommitted = commitments.reduce((sum, c) => sum + num(c.createArgument.amount), 0)
+    const percentFunded = raiseTarget > 0 ? Math.min(100, Math.round((totalCommitted / raiseTarget) * 100)) : 0
+    const approvalMap = Object.fromEntries(approvals.map((c) => [c.createArgument.role, c]))
+    const conditionsList = [
+      { key: 'FUNDED',     label: `Raise target (${raiseTarget} cBTC)`, done: totalCommitted >= raiseTarget, detail: `${totalCommitted} / ${raiseTarget} cBTC` },
+      { key: 'BOARD',      label: 'Board approval',    done: !!approvalMap['BOARD'] },
+      { key: 'LEGAL',      label: 'Legal approval',    done: !!approvalMap['LEGAL'] },
+      { key: 'COMPLIANCE', label: 'Compliance / KYC',  done: !!approvalMap['COMPLIANCE'] },
+    ]
+    res.json({
+      raiseTarget, totalCommitted, percentFunded,
+      conditions: conditionsList,
+      allGreen: conditionsList.every((c) => c.done),
+    })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -299,7 +352,6 @@ app.post('/deals/:dealId/accept', async (req, res) => {
     const acs = await acsOf(seller)
     const offer = acs.find((c) => c.contractId === offerId)
     if (!offer) return res.status(404).json({ error: 'Offer not visible / not found' })
-    // Compliance gate: a current KYC attestation must name the bidder, or the close is refused.
     const att = acs.find((c) => entityOf(c.templateId) === 'KYCAttestation'
       && c.createArgument.subject === offer.createArgument.buyer
       && Date.parse(c.createArgument.expiresAt) > Date.now())
@@ -309,9 +361,10 @@ app.post('/deals/:dealId/accept', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- the atomic close: both legs settle in ONE transaction, or not at all ---
-// Drives Atrium.Dvp on the live ledger (mirrors testAtomicDvP). `break: true` pulls one leg
-// first to demonstrate all-or-nothing (mirrors testAtomicityHolds) — nothing moves.
+// --- the conditional atomic close: validate 4 conditions on-ledger, then swap legs ---
+// Exercises Deal.Close (the on-ledger gate) first. If any condition fails, the close
+// aborts and nothing moves. On success, executes the DvP swap atomically.
+// `break: true` pulls one leg first to demonstrate all-or-nothing.
 app.post('/deals/:dealId/settle', async (req, res) => {
   try {
     await ensurePkg()
@@ -322,40 +375,58 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     const seller = await partyId(SELLER)
     const buyer = await partyId('Meridian')
 
-    // Use the seeded legs (real Holdings) so the swap actually moves on-ledger ownership.
+    // --- On-ledger conditional close gate (skipped in break-leg stress-test) ---
+    if (!breakLeg) {
+      const sellerAcs = await acsOf(seller)
+      const dealC = sellerAcs.find((c) => entityOf(c.templateId) === 'Deal')
+      const winningOffer = sellerAcs.find((c) => entityOf(c.templateId) === 'Offer')
+      if (!dealC)       return res.status(409).json({ error: 'No deal found — seed first' })
+      if (!winningOffer) return res.status(409).json({ error: 'No open offer — investor must submit a bid first' })
+      const att = sellerAcs.find((c) => entityOf(c.templateId) === 'KYCAttestation'
+        && c.createArgument.subject === winningOffer.createArgument.buyer
+        && Date.parse(c.createArgument.expiresAt) > Date.now())
+      if (!att) return res.status(403).json({ error: 'Winning investor is not KYC-cleared' })
+      const approvalCids  = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval').map((c) => c.contractId)
+      const commitmentCids = sellerAcs.filter((c) => entityOf(c.templateId) === 'Commitment').map((c) => c.contractId)
+      // Validate all 4 conditions on-ledger — aborts if any are missing
+      await exercise(seller, dealC.templateId, dealC.contractId, 'Close', {
+        winnerOffer: winningOffer.contractId, kycCid: att.contractId, approvalCids, commitmentCids,
+      })
+      // Mark the winning offer accepted (consuming choice, cleans up the offer contract)
+      await exercise(seller, winningOffer.templateId, winningOffer.contractId, 'Accept', { kycCid: att.contractId })
+    }
+
+    // --- Atomic DvP swap ---
     const regAcs = await acsOf(registry)
-    const cashH = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'USD-CASH' && c.createArgument.owner === buyer)
-    const eqH = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'HALDEN-EQUITY' && c.createArgument.owner === seller)
+    const cashH  = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'cBTC'          && c.createArgument.owner === buyer)
+    const eqH    = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'HALDEN-EQUITY' && c.createArgument.owner === seller)
     const factory = regAcs.find((c) => entityOf(c.templateId) === 'AllocationFactory')
     if (!cashH || !eqH || !factory) return res.status(409).json({ error: 'legs not ready (seed first) or already settled' })
 
     const settleBefore = new Date(Date.now() + 24 * 3600_000).toISOString()
     const coord = await create(operator, tid('SettlementCoordinator'), { executor: operator, settlementRef: ref, settleBefore })
     const cashAlloc = ex1(await exercise(buyer, factory.templateId, factory.contractId, 'Allocate', { holdingCid: cashH.contractId, settlementRef: ref, legId: 'cash', sender: buyer, receiver: seller, executor: operator }))
-    const eqAlloc = ex1(await exercise(seller, factory.templateId, factory.contractId, 'Allocate', { holdingCid: eqH.contractId, settlementRef: ref, legId: 'ownership', sender: seller, receiver: buyer, executor: operator }))
+    const eqAlloc   = ex1(await exercise(seller, factory.templateId, factory.contractId, 'Allocate', { holdingCid: eqH.contractId, settlementRef: ref, legId: 'ownership', sender: seller, receiver: buyer, executor: operator }))
 
     if (breakLeg) {
-      await exercise(seller, eqAlloc.templateId, eqAlloc.contractId, 'Allocation_Withdraw', {}) // pull the ownership leg
+      await exercise(seller, eqAlloc.templateId, eqAlloc.contractId, 'Allocation_Withdraw', {})
       try {
         await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
         return res.status(500).json({ error: 'expected the broken close to fail' })
       } catch {
-        await exercise(buyer, cashAlloc.templateId, cashAlloc.contractId, 'Allocation_Withdraw', {}) // restore the cash leg → state unchanged, re-runnable
+        await exercise(buyer, cashAlloc.templateId, cashAlloc.contractId, 'Allocation_Withdraw', {})
         return res.json({ settled: false, atomic: true, rolledBack: true, note: 'One leg was pulled → Settle failed → neither side moved.' })
       }
     }
 
     await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
-    // The share registry reflects the new owner: transfer the on-offer stake to the buyer so the
-    // cap table updates (seller's 12% → buyer).
     const stake = regAcs.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === seller && c.createArgument.instrument === 'HALDEN-EQUITY')
     if (stake) await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: buyer })
-    res.json({ settled: true, atomic: true, settlementRef: ref, cashToSeller: 4200000, equityToBuyer: 120000 })
+    res.json({ settled: true, atomic: true, settlementRef: ref, cbtcToFounder: 4200000, equityToInvestor: 120000 })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// Reset the close to its pre-settle state (re-runnable demo): archive the DvP holdings and
-// recreate the two legs (cash→buyer, equity→seller). Handy between recording takes.
+// Reset the close to pre-settle state (re-runnable demo)
 app.post('/deals/:dealId/reset-close', async (_req, res) => {
   try {
     await ensurePkg()
@@ -366,24 +437,21 @@ app.post('/deals/:dealId/reset-close', async (_req, res) => {
     for (const c of reg.filter((x) => entityOf(x.templateId) === 'Holding')) {
       await exercise(registry, c.templateId, c.contractId, 'Archive', {})
     }
-    await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'USD-CASH', amount: '4200000.0' })
+    await create(registry, tid('Holding'), { admin: registry, owner: buyer,  instrument: 'cBTC',          amount: '4200000.0' })
     await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
-    // Restore the cap table: move the stake certificate back from the buyer to the seller.
     const stake = reg.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === buyer && c.createArgument.instrument === 'HALDEN-EQUITY')
     if (stake) await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: seller })
     res.json({ reset: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// returns the single created/result contract from an exercise transaction
 function ex1(txResult: any): CreatedEvent {
   const ev = txResult?.transaction?.events?.find((e: any) => e.CreatedEvent)?.CreatedEvent
   if (!ev) throw new Error('exercise returned no created contract')
   return ev as CreatedEvent
 }
 
-// Lenses are discovered from the ledger: the seller + every buyer that holds an AccessGrant
-// on this deal. Invite a new buyer (below) and they show up here — fully dynamic.
+// Lenses: seller + every investor with an AccessGrant + approver roles (Board/Legal/Compliance)
 app.get('/viewers', async (_req, res) => {
   try {
     await ensurePkg()
@@ -393,27 +461,42 @@ app.get('/viewers', async (_req, res) => {
     const buyers = grants
       .map((c) => ({ name: labelFor(c.createArgument.buyer), tier: num(c.createArgument.maxTier) }))
       .filter((b) => (seen.has(b.name) ? false : (seen.add(b.name), true)))
-      .map((b) => ({ party: b.name, label: `${b.name} (Buyer · up to tier ${b.tier})`, role: 'buyer' as const, live: false }))
-    // A real external party on its own validator (acts with its own token) — flagged as a live identity.
+      .map((b) => ({ party: b.name, label: `${b.name} (Investor · up to tier ${b.tier})`, role: 'buyer' as const, live: false }))
+
     const remoteLens = REMOTE && !buyers.some((b) => b.party === REMOTE.label)
-      ? [{ party: REMOTE.label, label: `${REMOTE.label} (Buyer · own validator)`, role: 'buyer' as const, live: true }]
+      ? [{ party: REMOTE.label, label: `${REMOTE.label} (Investor · own validator)`, role: 'buyer' as const, live: true }]
       : []
-    res.json([{ party: SELLER, label: 'Halden (Seller)', role: 'seller', live: false }, ...buyers, ...remoteLens])
+
+    // Approver lenses — added once the relevant parties exist on-ledger (after seed)
+    const approverDefs = [
+      { logical: 'Board',       role: 'board',       label: 'Board (Approver)' },
+      { logical: 'Legal',       role: 'legal',       label: 'Legal (Approver)' },
+      { logical: 'KYCProvider', role: 'compliance',  label: 'Compliance (Approver)' },
+    ] as const
+    const approverLenses = (await Promise.all(
+      approverDefs.map(async (p) => {
+        try { await partyId(p.logical); return { party: p.logical, label: p.label, role: p.role, live: false } }
+        catch { return null }
+      })
+    )).filter(Boolean) as { party: string; label: string; role: 'board' | 'legal' | 'compliance'; live: boolean }[]
+
+    res.json([
+      { party: SELLER, label: 'Halden (Founder)', role: 'seller', live: false },
+      ...buyers,
+      ...remoteLens,
+      ...approverLenses,
+    ])
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// Seller onboards a buyer: ensure the buyer party exists on the ledger, then issue an
-// AccessGrant at the chosen tier (signed by the seller, observed by the buyer).
+// Seller onboards a buyer
 app.post('/deals/:dealId/invite', async (req, res) => {
   try {
     await ensurePkg()
     const { party: prefix, buyerName, buyerParty, tier } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can invite buyers' })
     const seller = await partyId(SELLER)
-    const maxTier = Math.max(1, Math.floor(Number(tier) || 1)) // any tier, not just 1/2
-    // Two modes: allocate a fresh local buyer (buyerName), or invite an EXISTING party by its full
-    // id (buyerParty) — e.g. a teammate on another validator. Cross-node disclosure routes the grant
-    // to their participant via the shared synchronizer; we don't allocate or hold rights for them.
+    const maxTier = Math.max(1, Math.floor(Number(tier) || 1))
     let buyer: string
     if (buyerParty && String(buyerParty).includes('::')) {
       buyer = String(buyerParty).trim()
@@ -427,7 +510,7 @@ app.post('/deals/:dealId/invite', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// Buyer submits a bid for the whole stake on offer (signed by the buyer, observed by the seller).
+// Investor submits a sealed bid
 app.post('/deals/:dealId/offer', async (req, res) => {
   try {
     await ensurePkg()
@@ -444,28 +527,29 @@ app.post('/deals/:dealId/offer', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// Seed a fresh (hosted) ledger with the demo, equivalent to ledger/setupDemo but over the
-// JSON API: Deal + 2 Documents + 2 tiered AccessGrants + a few accesses + Meridian's bid.
-// Idempotent — skips if a Deal already exists. Needs ATRIUM_PKG set (the uploaded DAR's pkg id).
+// Seed a fresh (hosted) ledger with the fundraise demo. Idempotent — skips existing contracts.
 app.post('/deals/:dealId/seed', async (_req, res) => {
   try {
     if (!PKG) return res.status(400).json({ error: 'set ATRIUM_PKG to the uploaded DAR package id before seeding' })
-    const seller = await ensureParty(SELLER)
+    const seller  = await ensureParty(SELLER)
     const boranic = await ensureParty('Boranic')
     const meridian = await ensureParty('Meridian')
-    const kycp = await ensureParty('KYCProvider')
+    const kycp    = await ensureParty('KYCProvider')
+    const board   = await ensureParty('Board')
+    const legal   = await ensureParty('Legal')
     const now = new Date().toISOString()
     const oneYear = new Date(Date.now() + 365 * 24 * 3600_000).toISOString()
     const did: string[] = []
 
-    // Idempotent: inspect what already exists for the seller and create only what's missing,
-    // so a half-run (e.g. interrupted) converges on re-run without duplicating.
     const acs = await acsOf(seller)
     const has = (e: string, pred: (a: any) => boolean = () => true) =>
       acs.some((c) => entityOf(c.templateId) === e && pred(c.createArgument))
     const grantFor = (full: string) => acs.find((c) => entityOf(c.templateId) === 'AccessGrant' && c.createArgument.buyer === full)
 
-    if (!has('Deal')) { await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 12% secondary', instrument: 'HALDEN-EQUITY', quantity: '120000.0' }); did.push('Deal') }
+    if (!has('Deal')) {
+      await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', quantity: '120000.0', raiseTarget: '25.0', requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'] })
+      did.push('Deal')
+    }
     if (!has('Document', (a) => a.docId === 'teaser')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'teaser', title: 'Investment teaser', tier: '1', contentHash: 'sha256:aa11', blobPointer: 's3://atrium/halden/teaser.enc' }); did.push('Document:teaser') }
     if (!has('Document', (a) => a.docId === 'financials')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'financials', title: 'Audited financials', tier: '2', contentHash: 'sha256:bb22', blobPointer: 's3://atrium/halden/financials.enc' }); did.push('Document:financials') }
 
@@ -480,30 +564,28 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
       await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'financials' })
       did.push('AccessEvents')
     }
-    if (!has('KYCAttestation', (a) => a.subject === boranic)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
+    if (!has('KYCAttestation', (a) => a.subject === boranic))  { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic,  relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
     if (!has('KYCAttestation', (a) => a.subject === meridian)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: meridian, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Meridian') }
-    if (!has('Offer')) { await create(meridian, tid('Offer'), { buyer: meridian, seller, dealId: DEAL_ID, pricePerUnit: '35.0000', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
+    if (!has('Offer')) { await create(meridian, tid('Offer'), { buyer: meridian, seller, dealId: DEAL_ID, pricePerUnit: '0.2083', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
 
-    // The two DvP legs (real Holdings) + the allocation factory, so the close is an actual
-    // atomic swap on-ledger. Registry is admin/signatory of the holdings (sees both legs).
+    // DvP legs: cBTC holding for the investor, equity holding for the founder
     const registry = await ensureParty('Registry')
     const operator = await ensureParty('AtriumApp')
     const regAcs = await acsOf(registry)
     const hasHolding = (inst: string) => regAcs.some((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === inst)
-    if (!hasHolding('USD-CASH')) { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'USD-CASH', amount: '4200000.0' }); did.push('Leg:cash') }
-    if (!hasHolding('HALDEN-EQUITY')) { await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' }); did.push('Leg:equity') }
+    if (!hasHolding('cBTC'))          { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'cBTC',          amount: '4200000.0' }); did.push('Leg:cBTC') }
+    if (!hasHolding('HALDEN-EQUITY')) { await create(registry, tid('Holding'), { admin: registry, owner: seller,   instrument: 'HALDEN-EQUITY', amount: '120000.0'  }); did.push('Leg:equity') }
     if (!regAcs.some((c) => entityOf(c.templateId) === 'AllocationFactory')) { await create(registry, tid('AllocationFactory'), { admin: registry, users: [meridian, seller, operator] }); did.push('Factory') }
 
-    // The cap table (share registry): Halden Robotics' 1,000,000 shares. The seller holds the
-    // 120,000-share (12%) stake on offer; the close transfers it to the buyer.
+    // Cap table
     const founders = await ensureParty('Founders')
     const esop = await ensureParty('ESOP')
     const hasCert = (holder: string) => regAcs.some((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === holder)
     if (!hasCert(founders)) { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: founders, instrument: 'HALDEN-EQUITY', shares: '600000.0' }); did.push('Cap:Founders') }
-    if (!hasCert(esop)) { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: esop, instrument: 'HALDEN-EQUITY', shares: '280000.0' }); did.push('Cap:ESOP') }
-    if (!hasCert(seller)) { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: seller, instrument: 'HALDEN-EQUITY', shares: '120000.0' }); did.push('Cap:Halden(stake)') }
+    if (!hasCert(esop))     { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: esop,     instrument: 'HALDEN-EQUITY', shares: '280000.0' }); did.push('Cap:ESOP') }
+    if (!hasCert(seller))   { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: seller,   instrument: 'HALDEN-EQUITY', shares: '120000.0' }); did.push('Cap:Halden(stake)') }
 
-    res.json({ seeded: did.length > 0, created: did, seller: displayName(seller), buyers: [displayName(boranic), displayName(meridian)] })
+    res.json({ seeded: did.length > 0, created: did, founder: displayName(seller), investors: [displayName(boranic), displayName(meridian)], approvers: [displayName(board), displayName(legal), displayName(kycp)] })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
