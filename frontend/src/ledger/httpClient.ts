@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AskResult, CloseAttestation, DealView, DocContent, ReadinessResult, Viewer } from '../types'
+import type { AskResult, CloseAttestation, DealSetup, DealView, DocContent, ReadinessResult, Viewer } from '../types'
 
 // Live client — talks to the Atrium executor (backend/), which in turn drives the real
 // Canton JSON Ledger API. Selective disclosure, RecordAccess, Accept and the atomic close
@@ -45,6 +45,12 @@ export const httpClient: LedgerClient = {
 
   async getDealView(viewer: PartyId): Promise<DealView> {
     return j<DealView>(`/deals/${DEAL}/view?party=${encodeURIComponent(viewer)}`)
+  },
+  async createDeal(viewer: PartyId, setup: DealSetup) {
+    await post(`/deals`, { party: viewer, ...setup })
+  },
+  async loadDemo() {
+    await post(`/deals/${DEAL}/seed`, {})
   },
   async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {
     return j<DocContent>(`/deals/${DEAL}/documents/${docId}/content?party=${encodeURIComponent(viewer)}`)

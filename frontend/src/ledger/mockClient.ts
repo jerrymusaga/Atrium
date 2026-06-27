@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, ReadinessResult, Viewer } from '../types'
+import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealSetup, DealView, DocContent, Document, Holding, Offer, ReadinessResult, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -22,13 +22,16 @@ let VIEWERS: Viewer[] = [
 
 const tierLabel = (t: number) => (t >= 2 ? 'tier 1+2' : 'tier 1')
 
-const deal: Deal = {
+let deal: Deal = {
   dealId: 'HALDEN-2026-A',
-  title: 'Halden Robotics — 12% secondary',
+  title: 'Halden Robotics — 25 cBTC Series A',
   seller: SELLER,
   instrument: 'HALDEN-EQUITY',
   quantity: 120000,
+  raiseTarget: 25,
+  tiers: ['Teaser', 'Financials', 'Legal'],
 }
+const tierName = (t: number) => deal.tiers?.[t - 1] ?? `Tier ${t}`
 
 type RawDoc = { docId: string; title: string; tier: number; contentHash: string; content: string }
 const docs: RawDoc[] = [
@@ -140,6 +143,22 @@ export const mockClient: LedgerClient = {
   async commitCBTC(_viewer: PartyId, _amount: number) { await wait(150) },
   async approve(_viewer: PartyId, _role: string) { await wait(150) },
 
+  // Founder sets up the room: rename tiers, set the raise target + title. Mutates the
+  // in-browser deal so named tiers flow through documents and the AI exactly like live.
+  async createDeal(viewer: PartyId, setup: DealSetup) {
+    if (viewer !== SELLER) throw new Error('Only the founder can set up a deal')
+    if (!(setup.raiseTarget > 0)) throw new Error('Set a raise target in cBTC')
+    const tiers = setup.tiers.map((t) => t.trim()).filter(Boolean)
+    if (tiers.length === 0) throw new Error('Name at least one tier')
+    await wait(150)
+    deal = { ...deal, title: setup.title.trim() || deal.title, instrument: setup.instrument.trim() || deal.instrument, raiseTarget: setup.raiseTarget, tiers }
+  },
+  // Mock is always seeded — "load demo" just restores the canonical demo config.
+  async loadDemo() {
+    await wait(150)
+    deal = { ...deal, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', raiseTarget: 25, tiers: ['Teaser', 'Financials', 'Legal'] }
+  },
+
   // Buyer submits a bid for the whole stake on offer. Visible to the seller only.
   async submitOffer(viewer: PartyId, pricePerUnit: number) {
     const me = VIEWERS.find((v) => v.party === viewer)
@@ -162,6 +181,7 @@ export const mockClient: LedgerClient = {
       docId: d.docId,
       title: d.title,
       tier: d.tier,
+      tierLabel: tierName(d.tier),
       contentHash: d.contentHash,
       accessible: isSeller || (maxTier >= d.tier) || (isRegulator && d.tier === 1),
     }))

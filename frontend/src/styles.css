@@ -478,3 +478,20 @@ body {
 /* ---- chip variant (conditions header) ---- */
 .chip { font-size: 11px; letter-spacing: .5px; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
 .chip.settled { border-color: var(--settled); color: var(--settled); }
+
+/* ---- Founder: set up the deal room (Phase 3) ---- */
+.panel-setup { border-color: var(--steel); background: linear-gradient(180deg, rgba(94,143,181,.06), rgba(31,39,51,.0)); }
+.setup-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+.setup-field { display: flex; flex-direction: column; gap: 6px; }
+.setup-lbl { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--steel); }
+.setup-tiers { display: grid; gap: 8px; margin-bottom: 18px; }
+.setup-tier-row { display: flex; align-items: center; gap: 8px; }
+.setup-tier-row .field { flex: 1; }
+.setup-tier-num { flex: 0 0 34px; color: var(--seal); font-size: 12px; }
+.setup-tier-del { flex: 0 0 38px; text-align: center; font-size: 16px; line-height: 1; padding: 8px 0; color: var(--muted); }
+.setup-tier-del:disabled { opacity: .3; cursor: not-allowed; }
+.setup-actions { display: flex; align-items: center; gap: 14px; }
+.setup-actions .btn { flex: 1; }
+.setup-or { color: var(--muted); font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+.setup-demo-note { margin-top: 12px; }
+@media (max-width: 720px) { .setup-grid { grid-template-columns: 1fr; } .setup-actions { flex-direction: column; align-items: stretch; } }

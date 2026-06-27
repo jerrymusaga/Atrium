@@ -5,6 +5,8 @@ import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
 import type { AskResult, CloseAttestation, DealView, DocContent, ReadinessResult, Viewer } from './types'
 
+const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
+
 const LIVE = import.meta.env.VITE_LIVE === '1'
 const client = LIVE ? httpClient : mockClient
 
@@ -38,6 +40,13 @@ export default function App() {
   const [committing, setCommitting] = useState(false)
   const [approving, setApproving] = useState(false)
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null)
+  // Founder "set up the room" flow
+  const [setupTitle, setSetupTitle] = useState('Halden Robotics — 25 cBTC Series A')
+  const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
+  const [setupTarget, setSetupTarget] = useState('25')
+  const [setupTiers, setSetupTiers] = useState<string[]>([...DEMO_TIERS])
+  const [creatingDeal, setCreatingDeal] = useState(false)
+  const [loadingDemo, setLoadingDemo] = useState(false)
 
   const viewCache = useRef<Record<string, DealView>>({})
 
@@ -90,7 +99,7 @@ export default function App() {
       const t = docTier; const name = docTitle
       setDocTitle(''); setDocContent('')
       await load(true)
-      setMsg(`Added "${name}" at tier ${t} — encrypted; only buyers granted tier ${t}+ can decrypt it.`)
+      setMsg(`Added "${name}" to “${tierName(t)}” — encrypted; only investors granted this tier or higher can decrypt it.`)
     } catch (e) { setMsg((e as Error).message) } finally { setAddingDoc(false) }
   }
 
@@ -123,6 +132,28 @@ export default function App() {
       await load(true)
       setMsg(`${approverRole} approval recorded on-ledger — the founder's close gate now reflects this.`)
     } catch (e) { setMsg((e as Error).message) } finally { setApproving(false) }
+  }
+
+  async function createDeal() {
+    const target = Number(setupTarget)
+    const tiers = setupTiers.map((t) => t.trim()).filter(Boolean)
+    if (!(target > 0) || tiers.length === 0) { setMsg('Set a raise target and at least one named tier.'); return }
+    setCreatingDeal(true); setMsg(null)
+    try {
+      await client.createDeal(viewer, { title: setupTitle, instrument: setupInstrument, raiseTarget: target, tiers })
+      await load(true)
+      setMsg(`Deal room created — named tiers ${tiers.join(' · ')}. Now add documents per tier and invite investors.`)
+    } catch (e) { setMsg((e as Error).message) } finally { setCreatingDeal(false) }
+  }
+
+  async function loadDemo() {
+    setLoadingDemo(true); setMsg(null)
+    try {
+      await client.loadDemo()
+      await refreshViewers()
+      await load(true)
+      setMsg('Fundraise demo loaded — investors, documents, bids, commitments and governance roles are live.')
+    } catch (e) { setMsg((e as Error).message) } finally { setLoadingDemo(false) }
   }
 
   if (!entered) return <Landing onEnter={() => setEntered(true)} live={LIVE} />
@@ -174,6 +205,9 @@ export default function App() {
 
   const conds = view?.conditions
   const allGreen = conds?.allGreen ?? false
+  const tiers = view?.deal?.tiers ?? []
+  const tierName = (t: number) => tiers[t - 1] ?? `Tier ${t}`
+  const noDeal = isSeller && !!view && !view.deal
 
   return (
     <div className="app">
@@ -186,7 +220,7 @@ export default function App() {
           </div>
         </div>
 
-        {view && (
+        {view?.deal && (
           <div className="deal-card">
             <div className="eyebrow">Active fundraise</div>
             <h1 className="deal-title">{view.deal.title}</h1>
@@ -220,7 +254,7 @@ export default function App() {
           </p>
         </div>
 
-        {current.role === 'seller' && !view?.settled && (
+        {current.role === 'seller' && !view?.settled && view?.deal && (
           <div className="invite">
             <div className="eyebrow">Invite an investor</div>
             <div className="invite-row">
@@ -232,14 +266,13 @@ export default function App() {
                 onKeyDown={(e) => { if (e.key === 'Enter' && inviteName.trim()) invite() }}
               />
               <select className="field tier-sel" value={inviteTier} onChange={(e) => setInviteTier(Number(e.target.value))}>
-                <option value={1}>Tier 1</option>
-                <option value={2}>Tier 2</option>
-                <option value={3}>Tier 3</option>
-                <option value={4}>Tier 4</option>
+                {(tiers.length ? tiers : ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4']).map((label, i) => (
+                  <option key={i} value={i + 1}>{label}</option>
+                ))}
               </select>
             </div>
             <button className="btn wide" disabled={!inviteName.trim()} onClick={invite}>
-              Onboard at tier {inviteTier}
+              Grant up to “{tierName(inviteTier)}”
             </button>
           </div>
         )}
@@ -249,6 +282,74 @@ export default function App() {
         <header className="seeing">
           You are <strong>{current.label}</strong>. {viewerBlurb(current.role)}
         </header>
+
+        {/* ── Founder: set up the room (shown on a fresh ledger, before a deal exists) ── */}
+        {noDeal && (
+          <section className="panel panel-setup">
+            <div className="panel-head">
+              <h2>Set up the deal room</h2>
+              <span className="count mono">no deal on-ledger yet</span>
+            </div>
+            <p className="panel-note">
+              Name your access tiers and set the raise target. The tier names become the
+              on-ledger <code>Deal.tiers</code> — every document, grant and the diligence copilot
+              speak in your names (e.g. “Financials”), not generic numbers.
+            </p>
+
+            <div className="setup-grid">
+              <label className="setup-field">
+                <span className="setup-lbl">Deal title</span>
+                <input className="field" value={setupTitle} onChange={(e) => setSetupTitle(e.target.value)} placeholder="e.g. Halden Robotics — Series A" />
+              </label>
+              <label className="setup-field">
+                <span className="setup-lbl">Instrument</span>
+                <input className="field" value={setupInstrument} onChange={(e) => setSetupInstrument(e.target.value)} placeholder="e.g. HALDEN-EQUITY" />
+              </label>
+              <label className="setup-field">
+                <span className="setup-lbl">Raise target (cBTC)</span>
+                <input className="field" inputMode="decimal" value={setupTarget} onChange={(e) => setSetupTarget(e.target.value)} placeholder="25" />
+              </label>
+            </div>
+
+            <div className="setup-tiers">
+              <span className="setup-lbl">Named access tiers (lowest → highest)</span>
+              {setupTiers.map((t, i) => (
+                <div key={i} className="setup-tier-row">
+                  <span className="setup-tier-num mono">T{i + 1}</span>
+                  <input
+                    className="field"
+                    value={t}
+                    placeholder={`Tier ${i + 1} name`}
+                    onChange={(e) => setSetupTiers((ts) => ts.map((x, j) => (j === i ? e.target.value : x)))}
+                  />
+                  <button
+                    className="btn ghost setup-tier-del"
+                    disabled={setupTiers.length <= 1}
+                    title="Remove tier"
+                    onClick={() => setSetupTiers((ts) => ts.filter((_, j) => j !== i))}
+                  >×</button>
+                </div>
+              ))}
+              <button className="btn ghost" disabled={setupTiers.length >= 6} onClick={() => setSetupTiers((ts) => [...ts, ''])}>
+                + Add a tier
+              </button>
+            </div>
+
+            <div className="setup-actions">
+              <button className="btn solid wide" disabled={creatingDeal} onClick={createDeal}>
+                {creatingDeal ? 'Creating the deal room on-ledger…' : 'Create the deal room'}
+              </button>
+              <div className="setup-or">or</div>
+              <button className="btn wide" disabled={loadingDemo} onClick={loadDemo}>
+                {loadingDemo ? 'Loading the fundraise demo…' : '⚡ Load the full fundraise demo'}
+              </button>
+            </div>
+            <p className="panel-note setup-demo-note">
+              The demo seeds three investors, multi-tier documents, sealed bids, cBTC commitments
+              and the Board / Legal / Compliance roles — everything needed to drive the close.
+            </p>
+          </section>
+        )}
 
         {/* ── Approver panel (Board / Legal / Compliance) ── */}
         {isApprover && (
@@ -279,7 +380,7 @@ export default function App() {
         )}
 
         {/* ── Documents ── */}
-        {!isApprover && (
+        {!isApprover && !noDeal && (
           <section className="panel">
             <div className="panel-head">
               <h2>Data room</h2>
@@ -289,7 +390,7 @@ export default function App() {
               {view?.documents.map((d) => (
                 <article key={d.docId} className={`doc ${d.accessible ? 'is-open' : 'is-sealed'}`}>
                   <div className="doc-top">
-                    <span className="tier mono">TIER {d.tier}</span>
+                    <span className="tier mono" title={`Access tier ${d.tier}`}>{(d.tierLabel ?? `TIER ${d.tier}`).toUpperCase()}</span>
                     {d.accessible
                       ? <span className="hash mono">{d.contentHash}</span>
                       : <span className="lock">🔒</span>}
@@ -315,11 +416,17 @@ export default function App() {
               <div className="add-doc">
                 <div className="add-doc-row">
                   <input className="field" placeholder="New document title" value={docTitle} onChange={(e) => setDocTitle(e.target.value)} />
-                  <input className="field doc-tier" type="number" min={1} value={docTier} title="Access tier" onChange={(e) => setDocTier(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
+                  {tiers.length ? (
+                    <select className="field tier-sel" value={docTier} title="Access tier" onChange={(e) => setDocTier(Number(e.target.value))}>
+                      {tiers.map((label, i) => <option key={i} value={i + 1}>{label}</option>)}
+                    </select>
+                  ) : (
+                    <input className="field doc-tier" type="number" min={1} value={docTier} title="Access tier" onChange={(e) => setDocTier(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
+                  )}
                 </div>
-                <textarea className="field add-doc-content" rows={3} placeholder="Document contents — encrypted off-ledger; key released only to buyers granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
+                <textarea className="field add-doc-content" rows={3} placeholder="Document contents — encrypted off-ledger; key released only to investors granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
                 <button className="btn" disabled={addingDoc || !docTitle.trim() || !docContent.trim()} onClick={addDoc}>
-                  {addingDoc ? 'Encrypting & recording…' : `+ Add document at tier ${docTier}`}
+                  {addingDoc ? 'Encrypting & recording…' : `+ Add to “${tierName(docTier)}”`}
                 </button>
               </div>
             )}
@@ -327,7 +434,7 @@ export default function App() {
         )}
 
         {/* ── Access trail ── */}
-        {!isApprover && (
+        {!isApprover && !noDeal && (
           <section className="panel">
             <div className="panel-head">
               <h2>Access trail</h2>
@@ -353,7 +460,7 @@ export default function App() {
         )}
 
         {/* ── Diligence copilot ── */}
-        {!isApprover && (
+        {!isApprover && !noDeal && (
           <section className="panel">
             <div className="panel-head">
               <h2>Diligence copilot</h2>
@@ -485,7 +592,7 @@ export default function App() {
         )}
 
         {/* ── Founder: conditions panel + close ── */}
-        {current.role === 'seller' && (
+        {current.role === 'seller' && !noDeal && (
           <section className="panel">
             <div className="panel-head">
               <h2>Close conditions</h2>

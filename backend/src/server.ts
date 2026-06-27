@@ -20,6 +20,8 @@ seedVault()
 
 const SELLER = 'Halden'
 const DEAL_ID = 'HALDEN-2026-A'
+const DEFAULT_TIERS = ['Teaser', 'Financials', 'Legal']
+const tierLabelOf = (tiers: string[], tier: number) => tiers[tier - 1] ?? `Tier ${tier}`
 
 const PARTY_PREFIX = process.env.PARTY_PREFIX ?? ''
 const hint = (logical: string) => `${PARTY_PREFIX}${logical}`
@@ -132,8 +134,10 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const myGrant = byEntity('AccessGrant')[0]?.createArgument
     const maxTier = isSeller ? 99 : (myGrant ? num(myGrant.maxTier) : 0)
 
+    const dealTiers: string[] = (dealC?.tiers as string[] | undefined) ?? DEFAULT_TIERS
     const documents = docManifest.map((d: any) => ({
       docId: d.docId, title: d.title, tier: num(d.tier),
+      tierLabel: tierLabelOf(dealTiers, num(d.tier)),
       contentHash: docMeta(d.docId)?.hash ?? d.contentHash,
       accessible: isSeller || maxTier >= num(d.tier),
     }))
@@ -223,7 +227,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const myApproval = myApprovalC ? { role: myApprovalC.createArgument.role, approvedAt: String(myApprovalC.createArgument.approvedAt).slice(11, 16) } : null
 
     res.json({
-      deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity), raiseTarget: num(dealC.raiseTarget ?? 0) } : null,
+      deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity), raiseTarget: num(dealC.raiseTarget ?? 0), tiers: dealTiers } : null,
       documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party),
       conditions, myCommitment, myApproval, investorsDetail,
@@ -282,18 +286,23 @@ app.post('/deals/:dealId/ask', async (req, res) => {
     if (!veniceConfigured()) return res.status(503).json({ error: 'Copilot offline — set VENICE_API_KEY in backend/.env' })
 
     const isSeller = prefix === SELLER
+    const seller = await partyId(SELLER)
+    const dealC = (await acsOf(seller)).find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    const dealTiers: string[] = (dealC?.tiers as string[] | undefined) ?? DEFAULT_TIERS
     let tier = 99
     if (!isSeller) {
       const party = await partyId(prefix)
       const grant = (await acsOf(party)).find((c) => entityOf(c.templateId) === 'AccessGrant')
       tier = grant ? num(grant.createArgument.maxTier) : 0
     }
+    const named = (t: number) => `"${tierLabelOf(dealTiers, t)}" (tier ${t})`
     const authorized = DOC_IDS.map((id) => ({ id, meta: docMeta(id) })).filter((d) => d.meta && tier >= d.meta.tier)
-    const context = authorized.map((d) => `### ${d.meta!.title} (Tier ${d.meta!.tier})\n${decryptDocument(d.id)}`).join('\n\n')
+    const context = authorized.map((d) => `### ${d.meta!.title} — ${named(d.meta!.tier)}\n${decryptDocument(d.id)}`).join('\n\n')
 
     const system = `You are the diligence copilot inside Atrium, a private capital markets OS on Canton Network.
 You are answering for the party "${prefix}". You may ONLY use the documents below — they are EXACTLY what this party's on-ledger access grant authorizes. Do not use outside knowledge and never invent figures.
-If the question needs information not in these documents (it lives in a higher access tier this party was not granted), say so plainly: state which tier it likely sits in and that their grant does not cover it. Be concise and cite the specific figures you use.
+The deal's named access tiers, in order, are: ${dealTiers.map((t, i) => `"${t}" (tier ${i + 1})`).join(', ')}.
+If the question needs information not in these documents (it lives in a higher access tier this party was not granted), say so plainly: name the tier it likely sits in (e.g. ${named(Math.min(tier + 1, dealTiers.length))}) and that their grant does not cover it. Be concise and cite the specific figures you use.
 
 AUTHORIZED DOCUMENTS:
 ${context || '(none — this party has no document access)'}`
@@ -610,6 +619,38 @@ app.post('/deals/:dealId/offer', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
+// Founder sets up the room: creates the Deal contract with NAMED tiers + raise target.
+// Named tiers live on-ledger (Deal.tiers); Document.tier stays an Int and reads its label
+// from here. Lightweight by design — the founder then adds docs + invites investors via the
+// existing endpoints. The full closeable demo is the /seed path.
+app.post('/deals', async (req, res) => {
+  try {
+    if (!PKG) return res.status(400).json({ error: 'set ATRIUM_PKG to the uploaded DAR package id before creating a deal' })
+    const { party: prefix, title, instrument, raiseTarget, tiers, quantity } = req.body ?? {}
+    if (prefix !== SELLER) return res.status(403).json({ error: 'Only the founder can set up a deal' })
+    const seller = await ensureParty(SELLER)
+    const existing = (await acsOf(seller)).find((c) => entityOf(c.templateId) === 'Deal')
+    if (existing) return res.status(409).json({ error: 'A deal is already configured on this ledger — load the demo or reset before creating a new one.' })
+
+    const dealTitle = String(title ?? '').trim() || 'Untitled raise'
+    const inst = String(instrument ?? '').trim() || 'EQUITY'
+    const target = Number(raiseTarget)
+    if (!(target > 0)) return res.status(400).json({ error: 'raiseTarget (cBTC) must be > 0' })
+    const qty = Number(quantity) > 0 ? Number(quantity) : 120000
+    const tierNames = Array.isArray(tiers)
+      ? tiers.map((t: any) => String(t).trim()).filter(Boolean)
+      : []
+    const finalTiers = tierNames.length > 0 ? tierNames : DEFAULT_TIERS
+
+    await create(seller, tid('Deal'), {
+      seller, dealId: DEAL_ID, title: dealTitle, instrument: inst,
+      quantity: qty.toFixed(1), raiseTarget: target.toFixed(4),
+      requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'], tiers: finalTiers,
+    })
+    res.json({ created: true, dealId: DEAL_ID, title: dealTitle, instrument: inst, raiseTarget: target, tiers: finalTiers })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
 // Seed a fresh (hosted) ledger with the fundraise demo. Idempotent — skips existing contracts.
 app.post('/deals/:dealId/seed', async (_req, res) => {
   try {
@@ -631,7 +672,7 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     const grantFor = (full: string) => acs.find((c) => entityOf(c.templateId) === 'AccessGrant' && c.createArgument.buyer === full)
 
     if (!has('Deal')) {
-      await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', quantity: '120000.0', raiseTarget: '25.0', requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'] })
+      await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', quantity: '120000.0', raiseTarget: '25.0', requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'], tiers: DEFAULT_TIERS })
       did.push('Deal')
     }
     if (!has('Document', (a) => a.docId === 'teaser')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'teaser', title: 'Investment teaser', tier: '1', contentHash: 'sha256:aa11', blobPointer: 's3://atrium/halden/teaser.enc' }); did.push('Document:teaser') }

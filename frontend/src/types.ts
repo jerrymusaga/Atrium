@@ -15,14 +15,24 @@ export type Deal = {
   instrument: string
   quantity: number
   raiseTarget?: number
+  tiers?: string[]   // named access tiers, ordered; tier N's label = tiers[N-1]
 }
 
 export type Document = {
   docId: string
   title: string
   tier: number
+  tierLabel?: string
   contentHash: string
   accessible: boolean
+}
+
+// Founder's "set up the room" config — creates the on-ledger Deal with named tiers.
+export type DealSetup = {
+  title: string
+  instrument: string
+  raiseTarget: number
+  tiers: string[]
 }
 
 export type AccessEvent = {
@@ -107,7 +117,7 @@ export type ReadinessResult = {
 }
 
 export type DealView = {
-  deal: Deal
+  deal: Deal | null
   documents: Document[]
   accessTrail: AccessEvent[]
   offers: Offer[]

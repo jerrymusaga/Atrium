@@ -55,6 +55,7 @@ template Deal
     quantity          : Decimal
     raiseTarget       : Decimal
     requiredApprovals : [Text]
+    tiers             : [Text]   -- named access tiers, ordered; tier N's label = tiers !! (N-1)
   where
     signatory seller
 
@@ -187,7 +188,7 @@ setupDemo = script do
   _ <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerA, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
   _ <- submit kyc do createCmd (KYCAttestation with kycProvider = kyc, subject = buyerB, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
 
-  _ <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Robotics — 25 cBTC Series A", instrument = "HALDEN-EQUITY", quantity = 120000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"])
+  _ <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Robotics — 25 cBTC Series A", instrument = "HALDEN-EQUITY", quantity = 120000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"], tiers = ["Teaser", "Financials", "Legal"])
   _ <- submit seller do createCmd (Document with seller, dealId, docId = "teaser",     title = "Investment teaser",  tier = 1, contentHash = "sha256:aa11", blobPointer = "s3://atrium/halden/teaser.enc")
   _ <- submit seller do createCmd (Document with seller, dealId, docId = "financials", title = "Audited financials", tier = 2, contentHash = "sha256:bb22", blobPointer = "s3://atrium/halden/financials.enc")
 
@@ -275,7 +276,7 @@ testConditionalClose = script do
   now      <- getTime
   let dealId = "HALDEN-2026-A"
 
-  dealCid   <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Series A", instrument = "HALDEN-EQUITY", quantity = 1000000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"])
+  dealCid   <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Series A", instrument = "HALDEN-EQUITY", quantity = 1000000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"], tiers = ["Teaser", "Financials", "Legal"])
   commitCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, amount = 25.0, committedAt = now)
   offerCid  <- submit investor do createCmd (Offer with buyer = investor, seller, dealId, pricePerUnit = 25.0, quantity = 1000000.0, submittedAt = now)
   kycCid    <- submit kycp do createCmd (KYCAttestation with kycProvider = kycp, subject = investor, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
