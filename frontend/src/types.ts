@@ -66,6 +66,12 @@ export type ConditionItem = {
   approvedAt?: string
 }
 
+export type CommitmentDetail = {
+  investorLabel: string
+  amount: number
+  committedAt: string
+}
+
 export type DealConditions = {
   raiseTarget: number
   totalCommitted: number
@@ -74,6 +80,30 @@ export type DealConditions = {
   allGreen: boolean
   commitmentCids?: string[]
   approvalCids?: string[]
+  commitmentsDetail?: CommitmentDetail[]
+}
+
+export type InvestorSummary = {
+  name: string
+  tier: number
+  committed: number | null
+  committedAt: string | null
+  hasBid: boolean
+  kyc: KYC | null
+}
+
+export type ReadinessSignal = {
+  key: string
+  label: string
+  pts: number
+  max: number
+  detail: string
+}
+
+export type ReadinessResult = {
+  score: number
+  signals: ReadinessSignal[]
+  narration: string
 }
 
 export type DealView = {
@@ -85,9 +115,10 @@ export type DealView = {
   capTable?: CapTableRow[]
   settled: boolean
   kyc?: KYC | null
-  conditions?: DealConditions        // founder view: close gate status
-  myCommitment?: { amount: number; committedAt: string } | null  // investor view
-  myApproval?: { role: string; approvedAt: string } | null       // approver view
+  conditions?: DealConditions
+  myCommitment?: { amount: number; committedAt: string } | null
+  myApproval?: { role: string; approvedAt: string } | null
+  investorsDetail?: InvestorSummary[]   // founder lens: per-investor competing bids table
 }
 
 export type CloseAttestation = {

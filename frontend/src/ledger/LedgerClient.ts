@@ -1,4 +1,4 @@
-import type { AskResult, CloseAttestation, DealView, DocContent, Viewer } from '../types'
+import type { AskResult, CloseAttestation, DealView, DocContent, ReadinessResult, Viewer } from '../types'
 
 // The seam between UI and ledger. The mock implements this entirely in-browser.
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
@@ -37,6 +37,8 @@ export interface LedgerClient {
   // Regulator attestation: did the close move exactly the recorded winning bid? Verifiable
   // without any tier-2 document access.
   attestClose(viewer: PartyId): Promise<CloseAttestation>
+  // Deal Readiness Score: composite % from on-chain signals + Venice narration (founder only).
+  getReadiness(): Promise<ReadinessResult>
 }
 
 export type PartyId = string

@@ -3,7 +3,7 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
-import type { AskResult, CloseAttestation, DealView, DocContent, Viewer } from './types'
+import type { AskResult, CloseAttestation, DealView, DocContent, ReadinessResult, Viewer } from './types'
 
 const LIVE = import.meta.env.VITE_LIVE === '1'
 const client = LIVE ? httpClient : mockClient
@@ -37,6 +37,7 @@ export default function App() {
   const [commitAmt, setCommitAmt] = useState('')
   const [committing, setCommitting] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [readiness, setReadiness] = useState<ReadinessResult | null>(null)
 
   const viewCache = useRef<Record<string, DealView>>({})
 
@@ -65,6 +66,11 @@ export default function App() {
   const current = viewers.find((v) => v.party === viewer)
   const isApprover = current?.role === 'board' || current?.role === 'legal' || current?.role === 'compliance'
   const approverRole = current?.role === 'board' ? 'BOARD' : current?.role === 'legal' ? 'LEGAL' : 'COMPLIANCE'
+  const isSeller = current?.role === 'seller'
+  useEffect(() => {
+    if (!isSeller) { setReadiness(null); return }
+    client.getReadiness().then(setReadiness).catch(() => {})
+  }, [view, isSeller])
 
   async function invite() {
     try {
@@ -449,6 +455,35 @@ export default function App() {
           </section>
         )}
 
+        {/* ── Deal Readiness Score (founder only) ── */}
+        {isSeller && readiness && (
+          <section className="panel panel-readiness">
+            <div className="panel-head">
+              <h2>Deal Readiness</h2>
+              <span className={`readiness-score-chip mono ${readiness.score >= 100 ? 'chip settled' : 'chip'}`}>
+                {readiness.score}%
+              </span>
+            </div>
+            <div className="readiness-gauge-wrap">
+              <div
+                className={`readiness-gauge ${readiness.score >= 75 ? 'high' : ''} ${readiness.score >= 100 ? 'full' : ''}`}
+                style={{ width: `${readiness.score}%` }}
+              />
+            </div>
+            <p className="readiness-narration">{readiness.narration}</p>
+            <ul className="readiness-signals">
+              {readiness.signals.map((s) => (
+                <li key={s.key} className={`signal-item ${s.pts === s.max ? 'signal-full' : s.pts > 0 ? 'signal-partial' : 'signal-zero'}`}>
+                  <span className="signal-dot mono">{s.pts === s.max ? '●' : s.pts > 0 ? '◑' : '○'}</span>
+                  <span className="signal-label">{s.label}</span>
+                  <span className="signal-detail mono">{s.detail}</span>
+                  <span className="signal-pts mono">{s.pts}/{s.max}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {/* ── Founder: conditions panel + close ── */}
         {current.role === 'seller' && (
           <section className="panel">
@@ -479,8 +514,36 @@ export default function App() {
               </>
             )}
 
-            {/* Seller also sees all bids */}
-            {view?.offers && view.offers.length > 0 && (
+            {/* Competing investors table (merged: grants + commitments + bids) */}
+            {view?.investorsDetail && view.investorsDetail.length > 0 ? (
+              <div className="inv-table-wrap">
+                <div className="eyebrow" style={{ marginBottom: 8 }}>Competing investors</div>
+                <table className="inv-table">
+                  <thead>
+                    <tr>
+                      <th>Investor</th>
+                      <th>Tier</th>
+                      <th>cBTC committed</th>
+                      <th>Sealed bid</th>
+                      <th>KYC</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {view.investorsDetail.map((inv) => (
+                      <tr key={inv.name}>
+                        <td className="inv-name">{inv.name}</td>
+                        <td className="mono">T{inv.tier}</td>
+                        <td className={`mono inv-cbtc${inv.committed === null ? ' none' : ''}`}>
+                          {inv.committed !== null ? `${inv.committed} cBTC` : '—'}
+                        </td>
+                        <td>{inv.hasBid ? <span className="o-flag mono">SEALED</span> : <span className="muted-note">—</span>}</td>
+                        <td>{inv.kyc ? <span className="kyc-badge ok">✓ KYB</span> : <span className="kyc-badge pending">Pending</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (view?.offers && view.offers.length > 0 && (
               <ul className="offers" style={{ marginTop: 16 }}>
                 {view.offers.map((o) => (
                   <li key={o.offerId} className="offer status-open">
@@ -496,7 +559,7 @@ export default function App() {
                   </li>
                 ))}
               </ul>
-            )}
+            ))}
 
             <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
               <div className="legs">

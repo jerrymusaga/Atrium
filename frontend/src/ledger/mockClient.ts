@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, Viewer } from '../types'
+import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealView, DocContent, Document, Holding, Offer, ReadinessResult, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -234,6 +234,21 @@ export const mockClient: LedgerClient = {
     if (settled) throw new Error('Already settled')
     await wait(900)
     throw new Error('One leg was pulled mid-close → settlement reverted → neither side moved.')
+  },
+
+  async getReadiness(): Promise<ReadinessResult> {
+    await wait(200)
+    return {
+      score: 50,
+      narration: 'Deal is 50% ready — documents and competing bids in, cBTC not yet committed, approvals pending.',
+      signals: [
+        { key: 'DOCS',      label: 'Documents in data room', pts: 15, max: 15, detail: '2 docs, multi-tier' },
+        { key: 'INVESTORS', label: 'Investors invited',      pts: 15, max: 15, detail: '2 investors granted access' },
+        { key: 'BIDS',      label: 'Sealed bids received',  pts: 20, max: 20, detail: '2 sealed bids in' },
+        { key: 'FUNDING',   label: 'Raise target (25 cBTC)', pts: 0,  max: 30, detail: '0 / 25 cBTC (0%)' },
+        { key: 'APPROVALS', label: 'Governance approvals',  pts: 0,  max: 20, detail: '0 / 3 required' },
+      ],
+    }
   },
 
   async attestClose(): Promise<CloseAttestation> {

@@ -164,8 +164,9 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const capRow = (c: any) => ({ holderLabel: labelFor(c.holder), shares: num(c.shares), pct: Math.round((num(c.shares) / totalShares) * 1000) / 10 })
     const capTable = (isSeller ? certs : certs.filter((c: any) => c.holder === party)).map(capRow).sort((a, b) => b.shares - a.shares)
 
-    // Conditions panel (for the founder / seller lens)
+    // Conditions panel + per-investor summary (for the founder / seller lens)
     let conditions: any = undefined
+    let investorsDetail: any[] | undefined = undefined
     if (isSeller && dealC) {
       const raiseTarget = num(dealC.raiseTarget ?? 0)
       const commitments = sellerView.filter((c) => entityOf(c.templateId) === 'Commitment')
@@ -185,7 +186,32 @@ app.get('/deals/:dealId/view', async (req, res) => {
         allGreen: conditionsList.every((c) => c.done),
         commitmentCids: commitments.map((c) => c.contractId),
         approvalCids: approvals.map((c) => c.contractId),
+        commitmentsDetail: commitments.map((c) => ({
+          investorLabel: labelFor(c.createArgument.investor),
+          amount: num(c.createArgument.amount),
+          committedAt: String(c.createArgument.committedAt).slice(11, 16),
+        })),
       }
+
+      // Merge grants + commitments + offers into a per-investor summary for the competing bids table
+      const grantContracts = sellerView.filter((c) => entityOf(c.templateId) === 'AccessGrant')
+      const offerContracts = sellerView.filter((c) => entityOf(c.templateId) === 'Offer')
+      const investorMap = new Map<string, { name: string; tier: number; committed: number | null; committedAt: string | null; hasBid: boolean; kyc: any }>()
+      for (const g of grantContracts) {
+        const name = labelFor(g.createArgument.buyer)
+        if (!investorMap.has(name)) investorMap.set(name, { name, tier: num(g.createArgument.maxTier), committed: null, committedAt: null, hasBid: false, kyc: kycOf(g.createArgument.buyer) })
+      }
+      for (const c of commitments) {
+        const name = labelFor(c.createArgument.investor)
+        const entry = investorMap.get(name)
+        if (entry) { entry.committed = num(c.createArgument.amount); entry.committedAt = String(c.createArgument.committedAt).slice(11, 16) }
+      }
+      for (const o of offerContracts) {
+        const name = labelFor(o.createArgument.buyer)
+        const entry = investorMap.get(name)
+        if (entry) entry.hasBid = true
+      }
+      investorsDetail = Array.from(investorMap.values())
     }
 
     // Commitment for a buyer lens
@@ -200,7 +226,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity), raiseTarget: num(dealC.raiseTarget ?? 0) } : null,
       documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party),
-      conditions, myCommitment, myApproval,
+      conditions, myCommitment, myApproval, investorsDetail,
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -339,6 +365,63 @@ app.get('/deals/:dealId/conditions', async (req, res) => {
       conditions: conditionsList,
       allGreen: conditionsList.every((c) => c.done),
     })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- deal readiness score: composite % from on-chain signals + Venice narration ---
+app.get('/deals/:dealId/readiness', async (req, res) => {
+  try {
+    await ensurePkg()
+    const seller = await partyId(SELLER)
+    const sellerAcs = await acsOf(seller)
+    const dealC = sellerAcs.find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    if (!dealC) return res.status(404).json({ error: 'Deal not found — seed first' })
+
+    const docs        = sellerAcs.filter((c) => entityOf(c.templateId) === 'Document')
+    const grants      = sellerAcs.filter((c) => entityOf(c.templateId) === 'AccessGrant')
+    const offers      = sellerAcs.filter((c) => entityOf(c.templateId) === 'Offer')
+    const commitments = sellerAcs.filter((c) => entityOf(c.templateId) === 'Commitment')
+    const approvals   = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval')
+
+    const raiseTarget    = num(dealC.raiseTarget ?? 0)
+    const totalCommitted = commitments.reduce((s, c) => s + num(c.createArgument.amount), 0)
+    const fundingRatio   = raiseTarget > 0 ? Math.min(1, totalCommitted / raiseTarget) : 0
+    const approvalCount  = approvals.length
+    const requiredCount  = (dealC.requiredApprovals ?? []).length || 3
+    const tiers          = new Set(docs.map((c) => String(c.createArgument.tier)))
+    const multiTier      = tiers.size > 1
+
+    const signals = [
+      { key: 'DOCS',      label: 'Documents in data room', max: 15, pts: docs.length === 0 ? 0 : multiTier ? 15 : 10, detail: docs.length === 0 ? 'No documents yet' : `${docs.length} doc${docs.length > 1 ? 's' : ''}${multiTier ? ', multi-tier' : ''}` },
+      { key: 'INVESTORS', label: 'Investors invited',      max: 15, pts: grants.length === 0 ? 0 : grants.length >= 2 ? 15 : 8, detail: `${grants.length} investor${grants.length !== 1 ? 's' : ''} granted access` },
+      { key: 'BIDS',      label: 'Sealed bids received',  max: 20, pts: offers.length === 0 ? 0 : offers.length >= 2 ? 20 : 12, detail: offers.length === 0 ? 'No bids yet' : `${offers.length} sealed bid${offers.length !== 1 ? 's' : ''} in` },
+      { key: 'FUNDING',   label: `Raise target (${raiseTarget} cBTC)`, max: 30, pts: Math.round(fundingRatio * 30), detail: raiseTarget > 0 ? `${totalCommitted} / ${raiseTarget} cBTC (${Math.round(fundingRatio * 100)}%)` : 'No raise target set' },
+      { key: 'APPROVALS', label: 'Governance approvals',  max: 20, pts: requiredCount > 0 ? Math.round((approvalCount / requiredCount) * 20) : 0, detail: `${approvalCount} / ${requiredCount} required` },
+    ]
+    const score = Math.min(100, signals.reduce((s, sg) => s + sg.pts, 0))
+
+    let narration: string | null = null
+    if (veniceConfigured()) {
+      try {
+        const summary = signals.map((sg) => `${sg.label}: ${sg.pts}/${sg.max}pts (${sg.detail})`).join('; ')
+        narration = await chat(
+          `You are the deal narrator inside Atrium, a private capital markets platform. Given the signals below, write ONE sentence (max 20 words) summarizing deal readiness for the founder. Be direct and factual. No greeting, no filler. Start with the score.`,
+          `Score: ${score}%. ${summary}`,
+        )
+      } catch { /* fall through to programmatic fallback */ }
+    }
+    if (!narration) {
+      const parts: string[] = []
+      if (fundingRatio >= 1) parts.push('raise target hit')
+      else if (totalCommitted > 0) parts.push(`${Math.round(fundingRatio * 100)}% funded`)
+      if (approvalCount === requiredCount && requiredCount > 0) parts.push('all approvals in')
+      else if (approvalCount > 0) parts.push(`${approvalCount}/${requiredCount} approvals`)
+      else parts.push('approvals pending')
+      if (offers.length === 0) parts.push('no bids yet')
+      narration = `Deal is ${score}% ready — ${parts.join(', ')}.`
+    }
+
+    res.json({ score, signals, narration })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -535,8 +618,9 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     const boranic = await ensureParty('Boranic')
     const meridian = await ensureParty('Meridian')
     const kycp    = await ensureParty('KYCProvider')
-    const board   = await ensureParty('Board')
-    const legal   = await ensureParty('Legal')
+    const board      = await ensureParty('Board')
+    const legal      = await ensureParty('Legal')
+    const prometheus = await ensureParty('Prometheus')
     const now = new Date().toISOString()
     const oneYear = new Date(Date.now() + 365 * 24 * 3600_000).toISOString()
     const did: string[] = []
@@ -557,19 +641,40 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     if (!gA) { gA = await create(seller, tid('AccessGrant'), { seller, buyer: boranic, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Boranic') }
     let gB = grantFor(meridian)
     if (!gB) { gB = await create(seller, tid('AccessGrant'), { seller, buyer: meridian, dealId: DEAL_ID, maxTier: '2', grantedAt: now }); did.push('Grant:Meridian') }
+    let gC = grantFor(prometheus)
+    if (!gC) { gC = await create(seller, tid('AccessGrant'), { seller, buyer: prometheus, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Prometheus') }
 
-    if (!has('AccessEvent')) {
+    if (!has('AccessEvent', (a) => a.buyer === boranic)) {
       await exercise(boranic, gA.templateId, gA.contractId, 'RecordAccess', { docId: 'teaser' })
+      did.push('AccessEvent:Boranic')
+    }
+    if (!has('AccessEvent', (a) => a.buyer === meridian)) {
       await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'teaser' })
       await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'financials' })
-      did.push('AccessEvents')
+      did.push('AccessEvent:Meridian')
     }
-    if (!has('KYCAttestation', (a) => a.subject === boranic))  { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic,  relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
-    if (!has('KYCAttestation', (a) => a.subject === meridian)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: meridian, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Meridian') }
-    if (!has('Offer')) { await create(meridian, tid('Offer'), { buyer: meridian, seller, dealId: DEAL_ID, pricePerUnit: '0.2083', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
+    if (!has('AccessEvent', (a) => a.buyer === prometheus)) {
+      await exercise(prometheus, gC.templateId, gC.contractId, 'RecordAccess', { docId: 'teaser' })
+      did.push('AccessEvent:Prometheus')
+    }
+    if (!has('KYCAttestation', (a) => a.subject === boranic))   { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic,   relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
+    if (!has('KYCAttestation', (a) => a.subject === meridian))  { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: meridian,  relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Meridian') }
+    if (!has('KYCAttestation', (a) => a.subject === prometheus)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: prometheus, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'SG', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Prometheus') }
+    if (!has('Offer', (a) => a.buyer === meridian))  { await create(meridian,  tid('Offer'), { buyer: meridian,  seller, dealId: DEAL_ID, pricePerUnit: '0.2083', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
+    if (!has('Offer', (a) => a.buyer === boranic))   { await create(boranic,   tid('Offer'), { buyer: boranic,   seller, dealId: DEAL_ID, pricePerUnit: '0.1850', quantity: '120000.0', submittedAt: now }); did.push('Offer:Boranic') }
+    if (!has('Offer', (a) => a.buyer === prometheus)) { await create(prometheus, tid('Offer'), { buyer: prometheus, seller, dealId: DEAL_ID, pricePerUnit: '0.1750', quantity: '120000.0', submittedAt: now }); did.push('Offer:Prometheus') }
 
-    // DvP legs: cBTC holding for the investor, equity holding for the founder
+    // cBTC commitments: Boranic 8 + Meridian 12 = 20/25 cBTC seeded; Prometheus commits via UI
     const registry = await ensureParty('Registry')
+    if (!has('Commitment', (a) => a.investor === boranic)) {
+      await createMulti([boranic, registry], tid('Commitment'), { admin: registry, investor: boranic, founder: seller, dealId: DEAL_ID, amount: '8.0000', committedAt: now })
+      did.push('Commitment:Boranic')
+    }
+    if (!has('Commitment', (a) => a.investor === meridian)) {
+      await createMulti([meridian, registry], tid('Commitment'), { admin: registry, investor: meridian, founder: seller, dealId: DEAL_ID, amount: '12.0000', committedAt: now })
+      did.push('Commitment:Meridian')
+    }
+    // DvP legs: cBTC holding for the investor, equity holding for the founder
     const operator = await ensureParty('AtriumApp')
     const regAcs = await acsOf(registry)
     const hasHolding = (inst: string) => regAcs.some((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === inst)
@@ -585,7 +690,7 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     if (!hasCert(esop))     { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: esop,     instrument: 'HALDEN-EQUITY', shares: '280000.0' }); did.push('Cap:ESOP') }
     if (!hasCert(seller))   { await create(registry, tid('ShareCertificate'), { registrar: registry, holder: seller,   instrument: 'HALDEN-EQUITY', shares: '120000.0' }); did.push('Cap:Halden(stake)') }
 
-    res.json({ seeded: did.length > 0, created: did, founder: displayName(seller), investors: [displayName(boranic), displayName(meridian)], approvers: [displayName(board), displayName(legal), displayName(kycp)] })
+    res.json({ seeded: did.length > 0, created: did, founder: displayName(seller), investors: [displayName(boranic), displayName(meridian), displayName(prometheus)], approvers: [displayName(board), displayName(legal), displayName(kycp)] })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
