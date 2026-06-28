@@ -1,4 +1,4 @@
-import type { AskResult, CloseAttestation, DealSetup, DealView, DocContent, ReadinessResult, Viewer } from '../types'
+import type { AskResult, CloseAttestation, DealSetup, DealView, DocContent, IntegrityReport, ReadinessResult, Viewer } from '../types'
 
 // The seam between UI and ledger. The mock implements this entirely in-browser.
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
@@ -45,6 +45,11 @@ export interface LedgerClient {
   attestClose(viewer: PartyId): Promise<CloseAttestation>
   // Deal Readiness Score: composite % from on-chain signals + Venice narration (founder only).
   getReadiness(): Promise<ReadinessResult>
+  // Provable integrity: recompute every vault blob's hash and prove it still matches the immutable
+  // Document.contentHash on Canton (founder / regulator). Closes the "docs are off-chain" gap.
+  verifyIntegrity(viewer: PartyId): Promise<IntegrityReport>
+  // DEMO ONLY: simulate an off-chain tamper of one blob so a re-verify catches it (toggle).
+  tamperVault(viewer: PartyId, docId: string): Promise<void>
 }
 
 export type PartyId = string

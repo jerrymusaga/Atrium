@@ -141,6 +141,27 @@ export type DealView = {
   lifecycle?: LifecycleEvent[]          // founder / oversight lens: unified on-chain audit trail
 }
 
+// Provable integrity — proof that the off-chain vault still matches what Canton recorded.
+export type IntegrityDoc = {
+  docId: string
+  title: string
+  tier: number
+  tierLabel: string
+  ledgerHash: string      // Document.contentHash, immutable on Canton
+  recomputedHash: string  // sha256 of the ciphertext on disk right now
+  intact: boolean         // ledgerHash === recomputedHash
+}
+
+export type IntegrityReport = {
+  documents: IntegrityDoc[]
+  allIntact: boolean
+  intactCount: number
+  total: number
+  // counts of the consequential ledger events backing the audit trail (tamper-evident on Canton)
+  events: { grants: number; disclosures: number; commitments: number; approvals: number }
+  checkedAt: string
+}
+
 export type CloseAttestation = {
   settled: boolean
   winningBuyerLabel: string | null

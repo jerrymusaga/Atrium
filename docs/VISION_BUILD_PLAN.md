@@ -84,6 +84,14 @@ bids in, cBTC committed vs target, approvals issued); Venice **narrates** it. Se
 Reword AI to "access restricted / insufficient privileges"; role-aware UI (each role sees only its
 actions); surface the on-chain audit trail (grants · commitments · approvals · settlement).
 
+### Phase 5 — Provable integrity (added 2026-06-28; deepen the moat, not the surface)
+Close the biggest honesty gap ("documents live off-chain") by making it *verifiable*. Canton already
+holds each blob's `Document.contentHash`; the founder/regulator can now **re-hash the whole vault and
+prove byte-for-byte it still matches the immutable on-ledger hash**. A demo "simulate tamper" toggle
+corrupts a blob off-chain so a re-verify catches it (✗ INTEGRITY BREACH) — then restores it. No Daml
+change (hash already on `Document`) → no redeploy. This is Canton-native rigor a generic dapp can't
+replicate, and it turns "off-chain storage" from a caveat into a guarantee.
+
 ---
 
 ## Target demo (3–4 min, deterministic seed)

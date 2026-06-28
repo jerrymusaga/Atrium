@@ -329,6 +329,31 @@ body {
 .audit-settlement .audit-kind { color: var(--ink); background: var(--settled); border-color: var(--settled); font-weight: 600; }
 .audit-settlement .audit-body { color: var(--settled); font-weight: 500; }
 
+/* ---- Provable integrity ---- */
+.chip.breach { color: #e06a5a; }
+.integrity-verdict { margin-top: 14px; padding: 13px 15px; border-radius: 11px; font-size: 13px; line-height: 1.5; border: 1px solid var(--line); }
+.integrity-verdict.ok { border-color: rgba(79,168,139,.45); background: rgba(79,168,139,.08); color: var(--text); }
+.integrity-verdict.breach { border-color: rgba(224,106,90,.5); background: rgba(224,106,90,.09); color: var(--text); }
+.iv-mark { font-weight: 600; margin-right: 8px; }
+.integrity-verdict.ok .iv-mark { color: var(--settled); }
+.integrity-verdict.breach .iv-mark { color: #e06a5a; }
+.iv-time { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.integrity-docs { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.idoc { border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px; background: var(--ink); }
+.idoc-ok { border-left: 3px solid var(--settled); }
+.idoc-breach { border-left: 3px solid #e06a5a; background: rgba(224,106,90,.05); }
+.idoc-head { display: flex; align-items: center; gap: 10px; }
+.idoc-status { font-weight: 700; }
+.idoc-ok .idoc-status { color: var(--settled); }
+.idoc-breach .idoc-status { color: #e06a5a; }
+.idoc-title { color: var(--text); font-weight: 500; font-size: 13.5px; }
+.idoc-tier { font-size: 9.5px; letter-spacing: 1px; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+.idoc-tamper { margin-left: auto; font-size: 11px; padding: 4px 9px; }
+.idoc-hashes { margin-top: 9px; display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.idoc-lbl { color: var(--steel-dim); margin-right: 8px; letter-spacing: .5px; }
+.idoc-mismatch { color: #e06a5a; }
+.integrity-events { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
 /* ---- Offers + close ---- */
 .chip { font-size: 11px; color: var(--muted); }
 .chip.settled { color: var(--settled); }

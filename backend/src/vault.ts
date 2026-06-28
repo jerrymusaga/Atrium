@@ -69,6 +69,29 @@ export function docMeta(docId: string) {
   return e ? { title: e.title, tier: e.tier, hash: e.hash, bytes: e.ciphertext.length + e.tag.length } : null
 }
 
+// Re-derive the content hash from the ciphertext that is ON DISK RIGHT NOW — independent of the
+// hash recorded at registration. The /verify endpoint compares this against the immutable
+// `Document.contentHash` on Canton: if a blob was altered off-chain, the two diverge and the
+// ledger catches it. This is the cryptographic link between the off-chain vault and the ledger.
+export function recomputeHash(docId: string): string | null {
+  const e = store.get(docId)
+  if (!e) return null
+  return 'sha256:' + createHash('sha256').update(Buffer.concat([e.ciphertext, e.tag])).digest('hex')
+}
+
+// DEMO ONLY — simulate an off-chain tamper: flip one ciphertext byte (and re-persist) WITHOUT
+// touching the recorded hash. The next /verify then recomputes a different hash than the ledger
+// holds → detected. Idempotent toggle: calling twice restores the original bytes. The on-ledger
+// `contentHash` is never changed (it can't be — it's immutable), which is exactly the point.
+export function tamperDocument(docId: string): boolean {
+  const e = store.get(docId)
+  if (!e || e.ciphertext.length === 0) return false
+  e.ciphertext = Buffer.from(e.ciphertext)
+  e.ciphertext[0] = e.ciphertext[0] ^ 0xff
+  persist(docId, e)
+  return true
+}
+
 // Releases the plaintext (the key + ciphertext stay server-side; only the decrypted text leaves).
 export function decryptDocument(docId: string): string | null {
   const e = store.get(docId)

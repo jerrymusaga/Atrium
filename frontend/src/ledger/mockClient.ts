@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealSetup, DealView, DocContent, Document, Holding, Offer, ReadinessResult, Viewer } from '../types'
+import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealSetup, DealView, DocContent, Document, Holding, IntegrityReport, Offer, ReadinessResult, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -68,6 +68,8 @@ let offers: Offer[] = [
 
 let settled = false
 let acceptedOffer: Offer | null = null
+// simulated off-chain tampering set (mock only) — docIds whose blob has been "corrupted"
+const tampered = new Set<string>()
 
 const CASH = 4200000
 const EQUITY = 120000
@@ -294,5 +296,33 @@ export const mockClient: LedgerClient = {
       settledCash: settled ? CASH : 0,
       matched: settled && expectedCash === CASH,
     }
+  },
+
+  // Provable integrity (mock): recompute each blob's "hash" and compare to the ledger value.
+  // A tampered doc recomputes to a different hash, so the ledger detects the off-chain change.
+  async verifyIntegrity(viewer: PartyId): Promise<IntegrityReport> {
+    if (viewer !== SELLER && viewer !== 'Regulator') throw new Error('Only the founder or a regulator can run an integrity check')
+    await wait(700)
+    const documents = docs.map((d) => {
+      const ledgerHash = d.contentHash
+      const recomputedHash = tampered.has(d.docId) ? d.contentHash.replace(/.$/, (c) => (c === 'f' ? 'a' : 'f')) : d.contentHash
+      return { docId: d.docId, title: d.title, tier: d.tier, tierLabel: tierName(d.tier), ledgerHash, recomputedHash, intact: ledgerHash === recomputedHash }
+    })
+    return {
+      documents,
+      allIntact: documents.every((d) => d.intact),
+      intactCount: documents.filter((d) => d.intact).length,
+      total: documents.length,
+      events: { grants: 2, disclosures: accessTrail.length, commitments: settled ? 3 : 1, approvals: settled ? 3 : 0 },
+      checkedAt: new Date().toTimeString().slice(0, 8),
+    }
+  },
+
+  // DEMO ONLY: toggle a simulated off-chain tamper on one blob.
+  async tamperVault(viewer: PartyId, docId: string) {
+    if (viewer !== SELLER && viewer !== 'Regulator') throw new Error('Only the founder or a regulator can run the tamper demo')
+    await wait(150)
+    if (tampered.has(docId)) tampered.delete(docId)
+    else tampered.add(docId)
   },
 }

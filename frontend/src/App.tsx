@@ -3,7 +3,7 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
-import type { AskResult, CloseAttestation, DealView, DocContent, LifecycleKind, ReadinessResult, Viewer } from './types'
+import type { AskResult, CloseAttestation, DealView, DocContent, IntegrityReport, LifecycleKind, ReadinessResult, Viewer } from './types'
 
 const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
 
@@ -40,6 +40,9 @@ export default function App() {
   const [committing, setCommitting] = useState(false)
   const [approving, setApproving] = useState(false)
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null)
+  const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
+  const [verifying, setVerifying] = useState(false)
+  const [tampering, setTampering] = useState<string | null>(null)
   // Founder "set up the room" flow
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — 25 cBTC Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
@@ -132,6 +135,21 @@ export default function App() {
       await load(true)
       setMsg(`${approverRole} approval recorded on-ledger — the founder's close gate now reflects this.`)
     } catch (e) { setMsg((e as Error).message) } finally { setApproving(false) }
+  }
+
+  async function verifyIntegrity() {
+    setVerifying(true); setMsg(null)
+    try {
+      setIntegrity(await client.verifyIntegrity(viewer))
+    } catch (e) { setMsg((e as Error).message) } finally { setVerifying(false) }
+  }
+
+  async function tamperVault(docId: string) {
+    setTampering(docId); setMsg(null)
+    try {
+      await client.tamperVault(viewer, docId)
+      setIntegrity(await client.verifyIntegrity(viewer))
+    } catch (e) { setMsg((e as Error).message) } finally { setTampering(null) }
   }
 
   async function createDeal() {
@@ -240,7 +258,7 @@ export default function App() {
               <button
                 key={v.party}
                 className={`lens-opt ${v.party === viewer ? 'is-active' : ''} role-${v.role}`}
-                onClick={() => { setViewer(v.party); setMsg(null); setAnswer(null); setDoc(null) }}
+                onClick={() => { setViewer(v.party); setMsg(null); setAnswer(null); setDoc(null); setIntegrity(null) }}
               >
                 <span className="lens-dot" />
                 <span className="lens-label">{v.label}</span>
@@ -456,6 +474,69 @@ export default function App() {
               ))}
               {view.lifecycle.length === 0 && <li className="empty">No ledger events recorded yet.</li>}
             </ol>
+          </section>
+        )}
+
+        {/* ── Provable integrity (founder / oversight lens) ── */}
+        {(isSeller || current.role === 'regulator') && !noDeal && (
+          <section className="panel panel-integrity">
+            <div className="panel-head">
+              <h2>Provable integrity</h2>
+              <span className={`chip mono ${integrity ? (integrity.allIntact ? 'settled' : 'breach') : ''}`}>
+                {integrity ? (integrity.allIntact ? `● ${integrity.intactCount}/${integrity.total} verified` : `✗ ${integrity.total - integrity.intactCount} tampered`) : '○ not yet checked'}
+              </span>
+            </div>
+            <p className="panel-note">
+              Documents live encrypted off-chain, but Canton holds each blob's <code>contentHash</code>.
+              This re-hashes every blob in the vault <strong>right now</strong> and proves byte-for-byte that it
+              still matches the immutable hash on the ledger. Alter a blob off-chain and the ledger catches it.
+            </p>
+
+            <button className="btn solid wide" disabled={verifying} onClick={verifyIntegrity}>
+              {verifying ? 'Re-hashing the vault & checking Canton…' : '🔐 Verify the vault against Canton'}
+            </button>
+
+            {integrity && (
+              <>
+                <div className={`integrity-verdict ${integrity.allIntact ? 'ok' : 'breach'}`}>
+                  {integrity.allIntact ? (
+                    <><span className="iv-mark mono">✓ VERIFIED</span> all {integrity.total} documents match their on-ledger hash byte-for-byte. The off-chain vault is intact. <span className="mono iv-time">checked {integrity.checkedAt}</span></>
+                  ) : (
+                    <><span className="iv-mark mono">✗ INTEGRITY BREACH</span> {integrity.total - integrity.intactCount} document(s) no longer match the ledger — the off-chain blob was altered. <span className="mono iv-time">checked {integrity.checkedAt}</span></>
+                  )}
+                </div>
+
+                <ul className="integrity-docs">
+                  {integrity.documents.map((d) => (
+                    <li key={d.docId} className={`idoc ${d.intact ? 'idoc-ok' : 'idoc-breach'}`}>
+                      <div className="idoc-head">
+                        <span className="idoc-status mono">{d.intact ? '✓' : '✗'}</span>
+                        <span className="idoc-title">{d.title}</span>
+                        <span className="idoc-tier mono">{d.tierLabel.toUpperCase()}</span>
+                        <button
+                          className="btn ghost idoc-tamper"
+                          disabled={tampering === d.docId}
+                          title="Demo: simulate altering this blob off-chain, then re-verify"
+                          onClick={() => tamperVault(d.docId)}
+                        >
+                          {tampering === d.docId ? '…' : d.intact ? 'simulate tamper' : 'restore'}
+                        </button>
+                      </div>
+                      <div className="idoc-hashes mono">
+                        <div className={d.intact ? '' : 'idoc-mismatch'}><span className="idoc-lbl">ledger</span> {d.ledgerHash}</div>
+                        <div className={d.intact ? '' : 'idoc-mismatch'}><span className="idoc-lbl">vault&nbsp;</span> {d.recomputedHash}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="integrity-events mono">
+                  Backing the audit trail on Canton:&nbsp;
+                  {integrity.events.grants} grants · {integrity.events.disclosures} disclosures ·
+                  {' '}{integrity.events.commitments} commitments · {integrity.events.approvals} approvals — each an immutable contract.
+                </div>
+              </>
+            )}
           </section>
         )}
 

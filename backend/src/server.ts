@@ -10,7 +10,7 @@ import express from 'express'
 import {
   activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
-import { decryptDocument, docMeta, loadVault, registerDocument, seedVault } from './vault.js'
+import { decryptDocument, docMeta, loadVault, recomputeHash, registerDocument, seedVault, tamperDocument } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
@@ -299,6 +299,64 @@ app.post('/deals/:dealId/documents', async (req, res) => {
     const { hash, pointer } = registerDocument(docId, name, t, body)
     await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId, title: name, tier: String(t), contentHash: hash, blobPointer: pointer })
     res.json({ docId, title: name, tier: t, hash })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- provable integrity: prove the off-chain vault still matches Canton ---
+// Recompute each blob's hash from the ciphertext on disk RIGHT NOW and compare it to the
+// immutable Document.contentHash on-ledger. If a blob was altered off-chain, the hashes diverge
+// and the ledger detects it. This closes the "documents live off-chain" honesty gap: Canton is
+// the tamper-evident source of truth, the vault is just storage.
+app.get('/deals/:dealId/verify', async (req, res) => {
+  try {
+    await ensurePkg()
+    const prefix = String(req.query.party ?? '')
+    if (prefix !== SELLER && prefix !== 'Regulator') return res.status(403).json({ error: 'Only the founder or a regulator can run an integrity check' })
+    const seller = await partyId(SELLER)
+    const sellerAcs = await acsOf(seller)
+    const dealC = sellerAcs.find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    const dealTiers: string[] = (dealC?.tiers as string[] | undefined) ?? DEFAULT_TIERS
+
+    const docContracts = sellerAcs.filter((c) => entityOf(c.templateId) === 'Document')
+    const documents = docContracts.map((c) => {
+      const d = c.createArgument
+      const ledgerHash = String(d.contentHash)
+      const recomputedHash = recomputeHash(d.docId) ?? '(blob missing)'
+      return {
+        docId: d.docId, title: d.title, tier: num(d.tier),
+        tierLabel: tierLabelOf(dealTiers, num(d.tier)),
+        ledgerHash, recomputedHash, intact: ledgerHash === recomputedHash,
+      }
+    })
+
+    const countOf = (e: string) => sellerAcs.filter((c) => entityOf(c.templateId) === e).length
+    res.json({
+      documents,
+      allIntact: documents.every((d) => d.intact),
+      intactCount: documents.filter((d) => d.intact).length,
+      total: documents.length,
+      events: {
+        grants: countOf('AccessGrant'),
+        disclosures: countOf('AccessEvent'),
+        commitments: countOf('Commitment'),
+        approvals: countOf('Approval'),
+      },
+      checkedAt: new Date().toISOString().slice(11, 19),
+    })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- DEMO ONLY: simulate an off-chain tamper so the next /verify catches it ---
+// Flips one ciphertext byte in the vault WITHOUT touching the on-ledger hash. Idempotent toggle —
+// call again to restore. Demonstrates that altering the off-chain blob is detectable against Canton.
+app.post('/deals/:dealId/tamper', async (req, res) => {
+  try {
+    const { party: prefix, docId } = req.body ?? {}
+    if (prefix !== SELLER && prefix !== 'Regulator') return res.status(403).json({ error: 'Only the founder or a regulator can run the tamper demo' })
+    if (!docId) return res.status(400).json({ error: 'docId required' })
+    const ok = tamperDocument(String(docId))
+    if (!ok) return res.status(404).json({ error: 'unknown document blob' })
+    res.json({ tampered: true, docId })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -701,8 +759,10 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
       await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', quantity: '120000.0', raiseTarget: '25.0', requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'], tiers: DEFAULT_TIERS })
       did.push('Deal')
     }
-    if (!has('Document', (a) => a.docId === 'teaser')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'teaser', title: 'Investment teaser', tier: '1', contentHash: 'sha256:aa11', blobPointer: 's3://atrium/halden/teaser.enc' }); did.push('Document:teaser') }
-    if (!has('Document', (a) => a.docId === 'financials')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'financials', title: 'Audited financials', tier: '2', contentHash: 'sha256:bb22', blobPointer: 's3://atrium/halden/financials.enc' }); did.push('Document:financials') }
+    // contentHash MUST be the real vault hash (seedVault registered these blobs) so /verify
+    // matches the ciphertext byte-for-byte. Placeholders here would falsely read as tampered.
+    if (!has('Document', (a) => a.docId === 'teaser')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'teaser', title: 'Investment teaser', tier: '1', contentHash: docMeta('teaser')?.hash ?? 'sha256:aa11', blobPointer: 's3://atrium/halden/teaser.enc' }); did.push('Document:teaser') }
+    if (!has('Document', (a) => a.docId === 'financials')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'financials', title: 'Audited financials', tier: '2', contentHash: docMeta('financials')?.hash ?? 'sha256:bb22', blobPointer: 's3://atrium/halden/financials.enc' }); did.push('Document:financials') }
 
     let gA = grantFor(boranic)
     if (!gA) { gA = await create(seller, tid('AccessGrant'), { seller, buyer: boranic, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Boranic') }
