@@ -92,6 +92,15 @@ corrupts a blob off-chain so a re-verify catches it (✗ INTEGRITY BREACH) — t
 change (hash already on `Document`) → no redeploy. This is Canton-native rigor a generic dapp can't
 replicate, and it turns "off-chain storage" from a caveat into a guarantee.
 
+### Phase 6 — Post-close lifecycle: atomic, private capital distribution (added 2026-06-28)
+Atrium runs the *ongoing* cap table, not just the one-shot close — this cements the "Operating System"
+claim and the RWA story. The founder declares a **pro-rata cBTC distribution**; ONE atomic transaction
+(`DistributionPool.Declare`) pays every shareholder from the post-close treasury and issues each a
+**private receipt only they can see** — rival holders never learn each other's payouts. A *new*
+capability shape (1→N atomic fan-out + per-recipient confidentiality), not a repeat of the close.
+Daml v0.6.0, proof `testDistribution` (atomicity · conservation · registrar-gating · privacy).
+**Requires redeploy of atrium-0.6.0.dar to Seaport.**
+
 ---
 
 ## Target demo (3–4 min, deterministic seed)
