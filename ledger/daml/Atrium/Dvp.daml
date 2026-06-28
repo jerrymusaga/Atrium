@@ -154,3 +154,100 @@ testAtomicityHolds = script do
   let cashToSeller = [ h | (_, h) <- sellerHoldings, h.instrument == "cBTC" ]
   assertMsg "no cBTC should have reached the seller" (null cashToSeller)
   pure ()
+
+-- ===========================================================================
+-- Capital distribution — the post-close lifecycle. Atrium isn't a one-shot deal
+-- tool; it runs the ongoing private cap table. A `DistributionPool` lets the
+-- company declare a pro-rata cBTC distribution to its shareholders. `Declare`
+-- fans out to EVERY holder in ONE transaction (atomic: all paid or none) and
+-- issues each a private `Distribution` receipt that ONLY that holder (and the
+-- company) can see — rival shareholders never learn each other's payouts. This
+-- is selective disclosure applied to an economic event, not a document.
+-- ===========================================================================
+
+-- A single shareholder's private payout receipt. Each holder is an observer ONLY on
+-- their own receipt, so Canton projects each holder just their slice; the company
+-- observes all (it declared them).
+template Distribution
+  with
+    registrar      : Party
+    company        : Party
+    holder         : Party
+    instrument     : Text
+    shares         : Decimal
+    perShare       : Decimal
+    amount         : Decimal
+    distributionId : Text
+    declaredAt     : Time
+  where
+    signatory registrar
+    observer holder, company
+
+-- The company's distribution facility, administered by the registrar (transfer agent /
+-- token admin). Nonconsuming so the company can declare distributions over time.
+template DistributionPool
+  with
+    registrar      : Party
+    company        : Party
+    instrument     : Text
+    distributionId : Text
+  where
+    signatory registrar
+    observer company
+
+    nonconsuming choice Declare : [ContractId Distribution]
+      with
+        treasuryCid : ContractId Holding     -- the company's cBTC holding, funds the payout
+        recipients  : [(Party, Decimal)]      -- (holder, shareCount)
+        perShare    : Decimal
+        declaredAt  : Time
+      controller registrar
+      do
+        treasury <- fetch treasuryCid
+        assertMsg "treasury instrument must match the distribution" (treasury.instrument == instrument)
+        assertMsg "treasury must belong to the company"            (treasury.owner == company)
+        let total = sum [ shares * perShare | (_, shares) <- recipients ]
+        assertMsg "treasury cannot cover the declared distribution" (treasury.amount >= total)
+        -- One transaction: debit the treasury, pay every holder, return the remainder.
+        archive treasuryCid
+        receipts <- forA recipients $ \(holder, shares) -> do
+          let amt = shares * perShare
+          create Holding with admin = registrar, owner = holder, instrument, amount = amt
+          create Distribution with registrar, company, holder, instrument, shares, perShare, amount = amt, distributionId, declaredAt
+        create Holding with admin = registrar, owner = company, instrument, amount = treasury.amount - total
+        pure receipts
+
+-- Proof: a pro-rata distribution pays every holder in one atomic transaction, conserves
+-- the treasury, is registrar-gated, and each holder sees ONLY their own receipt.
+testDistribution : Script ()
+testDistribution = script do
+  registry <- allocateParty "Registry"
+  company  <- allocateParty "Halden"
+  alice    <- allocateParty "Alice"
+  bob      <- allocateParty "Bob"
+  now <- getTime
+
+  treasury <- submit registry do createCmd (Holding with admin = registry, owner = company, instrument = "cBTC", amount = 100.0)
+  pool <- submit registry do createCmd (DistributionPool with registrar = registry, company, instrument = "cBTC", distributionId = "DIST-1")
+
+  -- only the registrar may declare a distribution
+  submitMustFail company do exerciseCmd pool (Declare with treasuryCid = treasury, recipients = [(alice, 60.0), (bob, 40.0)], perShare = 0.5, declaredAt = now)
+
+  -- atomic pro-rata fan-out
+  _ <- submit registry do exerciseCmd pool (Declare with treasuryCid = treasury, recipients = [(alice, 60.0), (bob, 40.0)], perShare = 0.5, declaredAt = now)
+
+  alicePaid <- (\hs -> [ h.amount | (_, h) <- hs ]) <$> query @Holding alice
+  alicePaid === [30.0]
+  bobPaid <- (\hs -> [ h.amount | (_, h) <- hs ]) <$> query @Holding bob
+  bobPaid === [20.0]
+  companyCBTC <- (\hs -> [ h.amount | (_, h) <- hs, h.instrument == "cBTC" ]) <$> query @Holding company
+  companyCBTC === [50.0]   -- conservation: 100 declared = 30 + 20 paid + 50 remainder
+
+  -- privacy: Alice sees ONLY her own receipt, never Bob's
+  aliceReceipts <- query @Distribution alice
+  map (\(_, d) -> d.holder) aliceReceipts === [alice]
+
+  -- the treasury cannot be over-distributed
+  small <- submit registry do createCmd (Holding with admin = registry, owner = company, instrument = "cBTC", amount = 5.0)
+  submitMustFail registry do exerciseCmd pool (Declare with treasuryCid = small, recipients = [(alice, 60.0)], perShare = 0.5, declaredAt = now)
+  pure ()

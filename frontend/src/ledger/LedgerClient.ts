@@ -50,6 +50,9 @@ export interface LedgerClient {
   verifyIntegrity(viewer: PartyId): Promise<IntegrityReport>
   // DEMO ONLY: simulate an off-chain tamper of one blob so a re-verify catches it (toggle).
   tamperVault(viewer: PartyId, docId: string): Promise<void>
+  // Post-close: founder declares a pro-rata cBTC distribution to the whole cap table — one
+  // atomic transaction, each holder gets a private receipt. Requires a closed deal (treasury).
+  distribute(viewer: PartyId, amount: number): Promise<void>
 }
 
 export type PartyId = string

@@ -80,4 +80,7 @@ export const httpClient: LedgerClient = {
   async tamperVault(viewer: PartyId, docId: string) {
     await post(`/deals/${DEAL}/tamper`, { party: viewer, docId })
   },
+  async distribute(viewer: PartyId, amount: number) {
+    await post(`/deals/${DEAL}/distribute`, { party: viewer, amount })
+  },
 }

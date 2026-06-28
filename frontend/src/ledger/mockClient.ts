@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealSetup, DealView, DocContent, Document, Holding, IntegrityReport, Offer, ReadinessResult, Viewer } from '../types'
+import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, Deal, DealSetup, DealView, DistributionSummary, DocContent, Document, Holding, IntegrityReport, MyDistribution, Offer, ReadinessResult, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger, seeded with the Halden Robotics demo.
@@ -70,6 +70,8 @@ let settled = false
 let acceptedOffer: Offer | null = null
 // simulated off-chain tampering set (mock only) — docIds whose blob has been "corrupted"
 const tampered = new Set<string>()
+// post-close capital distribution (mock) — null until the founder declares one
+let distribution: DistributionSummary | null = null
 
 const CASH = 4200000
 const EQUITY = 120000
@@ -212,7 +214,14 @@ export const mockClient: LedgerClient = {
         ].sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : 1))
       : undefined
 
-    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, capTable: capTableFor(viewer, isSeller || isRegulator), settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null, lifecycle }
+    // Capital distribution: founder/regulator see the whole declaration; a holder sees only theirs.
+    const myLabel = viewer === BUYER_A ? 'Boranic' : viewer === BUYER_B ? 'Meridian' : viewer
+    const mine = distribution?.recipients.find((r) => r.holderLabel === myLabel)
+    const myDistribution: MyDistribution | null = mine
+      ? { amount: mine.amount, shares: mine.shares, perShare: distribution!.perShare, declaredAt: distribution!.declaredAt }
+      : null
+
+    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, capTable: capTableFor(viewer, isSeller || isRegulator), settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null, lifecycle, distribution: isSeller || isRegulator ? distribution : null, myDistribution }
   },
 
   async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {
@@ -324,5 +333,23 @@ export const mockClient: LedgerClient = {
     await wait(150)
     if (tampered.has(docId)) tampered.delete(docId)
     else tampered.add(docId)
+  },
+
+  // Post-close: founder declares a pro-rata cBTC distribution to the whole cap table.
+  async distribute(viewer: PartyId, amount: number) {
+    if (viewer !== SELLER) throw new Error('Only the founder can declare a distribution')
+    if (!settled) throw new Error('No cBTC treasury — close the deal first.')
+    if (!(amount > 0)) throw new Error('amount must be > 0')
+    await wait(700)
+    const rows = capTableFor(SELLER, true)            // Founders / ESOP / winning investor
+    const totalShares = rows.reduce((s, r) => s + r.shares, 0) || 1
+    const perShare = amount / totalShares
+    distribution = {
+      distributionId: 'DIST-HALDEN-2026-A',
+      perShare,
+      total: amount,
+      declaredAt: new Date().toTimeString().slice(0, 5),
+      recipients: rows.map((r) => ({ holderLabel: r.holderLabel, shares: r.shares, amount: Math.round(r.shares * perShare) })),
+    }
   },
 }

@@ -139,6 +139,8 @@ export type DealView = {
   myApproval?: { role: string; approvedAt: string } | null
   investorsDetail?: InvestorSummary[]   // founder lens: per-investor competing bids table
   lifecycle?: LifecycleEvent[]          // founder / oversight lens: unified on-chain audit trail
+  distribution?: DistributionSummary | null   // founder / regulator: declared capital distribution
+  myDistribution?: MyDistribution | null       // holder lens: their own private payout receipt
 }
 
 // Provable integrity — proof that the off-chain vault still matches what Canton recorded.
@@ -161,6 +163,17 @@ export type IntegrityReport = {
   events: { grants: number; disclosures: number; commitments: number; approvals: number }
   checkedAt: string
 }
+
+// Post-close lifecycle — a pro-rata cBTC distribution to the cap table.
+export type DistributionRecipient = { holderLabel: string; shares: number; amount: number }
+export type DistributionSummary = {
+  distributionId: string
+  perShare: number
+  total: number
+  declaredAt: string
+  recipients: DistributionRecipient[]   // founder / regulator only
+}
+export type MyDistribution = { amount: number; shares: number; perShare: number; declaredAt: string }
 
 export type CloseAttestation = {
   settled: boolean

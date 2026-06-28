@@ -3,7 +3,7 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
-import type { AskResult, CloseAttestation, DealView, DocContent, IntegrityReport, LifecycleKind, ReadinessResult, Viewer } from './types'
+import type { AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LifecycleKind, ReadinessResult, Viewer } from './types'
 
 const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
 
@@ -43,6 +43,8 @@ export default function App() {
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [tampering, setTampering] = useState<string | null>(null)
+  const [distAmount, setDistAmount] = useState('1000000')
+  const [declaring, setDeclaring] = useState(false)
   // Founder "set up the room" flow
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — 25 cBTC Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
@@ -150,6 +152,17 @@ export default function App() {
       await client.tamperVault(viewer, docId)
       setIntegrity(await client.verifyIntegrity(viewer))
     } catch (e) { setMsg((e as Error).message) } finally { setTampering(null) }
+  }
+
+  async function declareDistribution() {
+    const amt = Number(distAmount)
+    if (!(amt > 0)) { setMsg('Set a total cBTC amount to distribute.'); return }
+    setDeclaring(true); setMsg(null)
+    try {
+      await client.distribute(viewer, amt)
+      await load(true)
+      setMsg(`Declared a ${amt.toLocaleString()} cBTC distribution — every shareholder was paid pro-rata in one atomic transaction; each sees only their own receipt.`)
+    } catch (e) { setMsg((e as Error).message) } finally { setDeclaring(false) }
   }
 
   async function createDeal() {
@@ -877,11 +890,93 @@ export default function App() {
           </section>
         )}
 
+        {/* ── Post-close lifecycle: capital distribution ── */}
+        {view?.settled && !isApprover && !noDeal && (
+          <>
+            {/* Founder: declare a pro-rata distribution, or review the one declared */}
+            {isSeller && (
+              <section className="panel panel-dist">
+                <div className="panel-head">
+                  <h2>Capital distribution</h2>
+                  <span className={`chip mono ${view.distribution ? 'settled' : ''}`}>
+                    {view.distribution ? `● ${view.distribution.total.toLocaleString()} cBTC declared` : '○ none declared'}
+                  </span>
+                </div>
+                <p className="panel-note">
+                  Atrium runs the ongoing cap table, not just the close. Declare a pro-rata cBTC
+                  distribution and every shareholder is paid in <strong>one atomic transaction</strong> — each
+                  receiving a <strong>private receipt only they can see</strong>. Rival holders never learn each other's payouts.
+                </p>
+
+                {!view.distribution ? (() => {
+                  const amt = Number(distAmount) || 0
+                  const rows = view.capTable ?? []
+                  const totalShares = rows.reduce((s, r) => s + r.shares, 0) || 1
+                  const perShare = amt / totalShares
+                  return (
+                    <>
+                      <div className="bid-row">
+                        <input className="field" inputMode="decimal" placeholder="Total cBTC to distribute" value={distAmount} onChange={(e) => setDistAmount(e.target.value)} />
+                        <button className="btn solid" disabled={declaring || !(amt > 0)} onClick={declareDistribution}>
+                          {declaring ? 'Paying every holder atomically…' : 'Declare distribution'}
+                        </button>
+                      </div>
+                      <table className="inv-table dist-preview">
+                        <thead><tr><th>Holder</th><th>Shares</th><th>Pro-rata payout</th></tr></thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr key={r.holderLabel}>
+                              <td className="inv-name">{r.holderLabel}</td>
+                              <td className="mono">{r.shares.toLocaleString()}</td>
+                              <td className="mono">{Math.round(r.shares * perShare).toLocaleString()} cBTC</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <p className="panel-note dist-rate mono">@ {perShare.toFixed(4)} cBTC / share · {rows.length} holders · one atomic fan-out</p>
+                    </>
+                  )
+                })() : <DistributionTable d={view.distribution} />}
+              </section>
+            )}
+
+            {/* Regulator: read-only oversight of the distribution */}
+            {current.role === 'regulator' && view.distribution && (
+              <section className="panel panel-dist">
+                <div className="panel-head">
+                  <h2>Capital distribution</h2>
+                  <span className="chip mono settled">● {view.distribution.total.toLocaleString()} cBTC</span>
+                </div>
+                <DistributionTable d={view.distribution} />
+              </section>
+            )}
+
+            {/* Holder: their own private receipt (rivals' payouts invisible) */}
+            {current.role === 'buyer' && view.myDistribution && (
+              <section className="panel panel-dist">
+                <div className="panel-head">
+                  <h2>Your distribution</h2>
+                  <span className="chip mono settled">● paid</span>
+                </div>
+                <div className="dist-receipt">
+                  <span className="dist-amt mono">{view.myDistribution.amount.toLocaleString()} cBTC</span>
+                  <span className="dist-receipt-sub">
+                    on {view.myDistribution.shares.toLocaleString()} shares · @ {view.myDistribution.perShare.toFixed(4)} cBTC/share · {view.myDistribution.declaredAt}
+                  </span>
+                </div>
+                <p className="panel-note">
+                  This receipt is yours alone — you cannot see what other shareholders received, and they cannot see yours.
+                </p>
+              </section>
+            )}
+          </>
+        )}
+
         <footer className="verified">
           <span className={`mode-pill ${LIVE ? 'live' : ''}`}>{LIVE ? '● LIVE on Canton' : '○ in-browser mock'}</span>
           <span className="verified-note">
-            Privacy, atomicity &amp; conditional close are proven by <code>daml test</code> —
-            <code>testPrivacyProjection</code>, <code>testAtomicDvP</code>, <code>testAtomicityHolds</code>, <code>testConditionalClose</code>.
+            Privacy, atomicity, conditional close &amp; distribution are proven by <code>daml test</code> —
+            <code>testPrivacyProjection</code>, <code>testAtomicDvP</code>, <code>testAtomicityHolds</code>, <code>testConditionalClose</code>, <code>testDistribution</code>.
           </span>
         </footer>
 
@@ -907,6 +1002,29 @@ export default function App() {
         {msg && <div className="toast" onClick={() => setMsg(null)}>{msg}</div>}
       </main>
     </div>
+  )
+}
+
+function DistributionTable({ d }: { d: DistributionSummary }) {
+  return (
+    <>
+      <div className="dist-summary mono">
+        <span><strong>{d.total.toLocaleString()} cBTC</strong> paid · {d.recipients.length} holders · @ {d.perShare.toFixed(4)} / share · {d.declaredAt}</span>
+      </div>
+      <table className="inv-table dist-preview">
+        <thead><tr><th>Holder</th><th>Shares</th><th>Received</th></tr></thead>
+        <tbody>
+          {d.recipients.map((r) => (
+            <tr key={r.holderLabel}>
+              <td className="inv-name">{r.holderLabel}</td>
+              <td className="mono">{r.shares.toLocaleString()}</td>
+              <td className="mono">{r.amount.toLocaleString()} cBTC</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="panel-note">Every row was created in the same transaction — all holders paid, or none. Each holder's receipt is private to them.</p>
+    </>
   )
 }
 

@@ -58,7 +58,7 @@ const REMOTE = (process.env.REMOTE_PARTY && process.env.REMOTE_LEDGER_API_URL)
   : null
 
 let PKG: string | null = process.env.ATRIUM_PKG ?? null
-const DVP_ENTITIES = new Set(['Holding', 'Allocation', 'AllocationFactory', 'SettlementCoordinator'])
+const DVP_ENTITIES = new Set(['Holding', 'Allocation', 'AllocationFactory', 'SettlementCoordinator', 'Distribution', 'DistributionPool'])
 const EQUITY_ENTITIES = new Set(['ShareCertificate'])
 function tid(entity: string): string {
   if (!PKG) throw new Error('package id not resolved yet')
@@ -168,6 +168,28 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const capRow = (c: any) => ({ holderLabel: labelFor(c.holder), shares: num(c.shares), pct: Math.round((num(c.shares) / totalShares) * 1000) / 10 })
     const capTable = (isSeller ? certs : certs.filter((c: any) => c.holder === party)).map(capRow).sort((a, b) => b.shares - a.shares)
 
+    // Capital distribution (post-close lifecycle): per-holder private payout receipts.
+    // Founder/regulator see the whole declared distribution; a holder sees ONLY their own slice.
+    const distContracts = regAcs.filter((c) => entityOf(c.templateId) === 'Distribution').map((c) => c.createArgument)
+    let distribution: any = undefined
+    let myDistribution: any = undefined
+    if (distContracts.length > 0) {
+      if (isSeller || prefix === 'Regulator') {
+        const recips = distContracts
+          .map((d: any) => ({ holderLabel: labelFor(d.holder), shares: num(d.shares), amount: num(d.amount) }))
+          .sort((a, b) => b.amount - a.amount)
+        distribution = {
+          distributionId: distContracts[0].distributionId,
+          perShare: num(distContracts[0].perShare),
+          total: recips.reduce((s, r) => s + r.amount, 0),
+          declaredAt: String(distContracts[0].declaredAt).slice(11, 16),
+          recipients: recips,
+        }
+      }
+      const own = distContracts.find((d: any) => d.holder === party)
+      if (own) myDistribution = { amount: num(own.amount), shares: num(own.shares), perShare: num(own.perShare), declaredAt: String(own.declaredAt).slice(11, 16) }
+    }
+
     // Conditions panel + per-investor summary (for the founder / seller lens)
     let conditions: any = undefined
     let investorsDetail: any[] | undefined = undefined
@@ -257,6 +279,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party),
       conditions, myCommitment, myApproval, investorsDetail, lifecycle,
+      distribution, myDistribution,
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -357,6 +380,48 @@ app.post('/deals/:dealId/tamper', async (req, res) => {
     const ok = tamperDocument(String(docId))
     if (!ok) return res.status(404).json({ error: 'unknown document blob' })
     res.json({ tampered: true, docId })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- post-close lifecycle: founder declares a pro-rata cBTC distribution ---
+// One atomic transaction (DistributionPool.Declare) pays every cap-table holder their pro-rata
+// slice from the founder's post-close cBTC treasury and issues each a PRIVATE receipt — holders
+// see only their own. Atrium runs the ongoing cap table, not just the one-shot close.
+app.post('/deals/:dealId/distribute', async (req, res) => {
+  try {
+    await ensurePkg()
+    const { party: prefix, amount } = req.body ?? {}
+    if (prefix !== SELLER) return res.status(403).json({ error: 'Only the founder can declare a distribution' })
+    const total = Number(amount)
+    if (!(total > 0)) return res.status(400).json({ error: 'amount (total cBTC to distribute) must be > 0' })
+
+    const registry = await partyId('Registry')
+    const seller = await partyId(SELLER)
+    const regAcs = await acsOf(registry)
+
+    // Recipients = the current cap table (every ShareCertificate holder + their share count).
+    const certs = regAcs.filter((c) => entityOf(c.templateId) === 'ShareCertificate')
+    if (certs.length === 0) return res.status(400).json({ error: 'No shareholders on the cap table yet' })
+    const totalShares = certs.reduce((s, c) => s + num(c.createArgument.shares), 0)
+    const perShare = total / totalShares
+    const recipients = certs.map((c) => ({ _1: c.createArgument.holder, _2: num(c.createArgument.shares).toFixed(1) }))
+
+    // Treasury = the founder's cBTC holding (received at the close). No close ⇒ no treasury.
+    const treasury = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'cBTC' && c.createArgument.owner === seller)
+    if (!treasury) return res.status(400).json({ error: 'No cBTC treasury — the founder receives cBTC only at the close. Close the deal first.' })
+    if (num(treasury.createArgument.amount) < total) return res.status(400).json({ error: `Treasury holds ${num(treasury.createArgument.amount)} cBTC; cannot distribute ${total}.` })
+
+    // The distribution facility — created once, reused for future distributions.
+    let pool = regAcs.find((c) => entityOf(c.templateId) === 'DistributionPool')
+    if (!pool) pool = await create(registry, tid('DistributionPool'), { registrar: registry, company: seller, instrument: 'cBTC', distributionId: `DIST-${DEAL_ID}` })
+
+    await exercise(registry, pool.templateId, pool.contractId, 'Declare', {
+      treasuryCid: treasury.contractId,
+      recipients,
+      perShare: perShare.toFixed(10),
+      declaredAt: new Date().toISOString(),
+    })
+    res.json({ declared: true, total, perShare, recipients: certs.length })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
