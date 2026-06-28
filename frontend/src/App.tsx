@@ -10,8 +10,9 @@ const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
 const LIVE = import.meta.env.VITE_LIVE === '1'
 const client = LIVE ? httpClient : mockClient
 
-function money(n: number) {
-  return n >= 1000 ? `$${(n).toLocaleString()}` : `$${n}`
+// Format a per-share cBTC rate readably even when it's a small fraction.
+function fmtRate(n: number) {
+  return n >= 1 ? n.toFixed(2) : n.toPrecision(2)
 }
 
 export default function App() {
@@ -43,7 +44,7 @@ export default function App() {
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [tampering, setTampering] = useState<string | null>(null)
-  const [distAmount, setDistAmount] = useState('1000000')
+  const [distAmount, setDistAmount] = useState('10')
   const [declaring, setDeclaring] = useState(false)
   // Founder "set up the room" flow
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — 25 cBTC Series A')
@@ -841,7 +842,7 @@ export default function App() {
             </div>
             <div className="attest">
               <button className="btn wide" onClick={verifyClose}>
-                Verify the close matched the recorded bid
+                Verify the founder received exactly the committed cBTC
               </button>
               {attestation && (
                 <div className={`attest-card ${attestation.matched ? 'ok' : 'pending'}`}>
@@ -849,10 +850,10 @@ export default function App() {
                     <>
                       <div className="attest-line">
                         <span className="mono">{attestation.matched ? '✓ VERIFIED' : '✗ MISMATCH'}</span>
-                        settled cash {money(attestation.settledCash)} {attestation.matched ? '=' : '≠'} winning bid {money(attestation.bidPricePerUnit)} × {attestation.bidQuantity.toLocaleString()}
+                        settled raise {attestation.settledCash} cBTC {attestation.matched ? '=' : '≠'} investor commitments {attestation.expectedCash} cBTC
                       </div>
                       <div className="attest-sub">
-                        Attested from the recorded bid and the settlement legs — <strong>without any tier-2 document access</strong>.
+                        Attested from the on-ledger commitments and the settlement legs — <strong>without any tier-2 document access</strong>.
                       </div>
                     </>
                   ) : (
@@ -933,7 +934,7 @@ export default function App() {
                           ))}
                         </tbody>
                       </table>
-                      <p className="panel-note dist-rate mono">@ {perShare.toFixed(4)} cBTC / share · {rows.length} holders · one atomic fan-out</p>
+                      <p className="panel-note dist-rate mono">@ {fmtRate(perShare)} cBTC / share · {rows.length} holders · one atomic fan-out</p>
                     </>
                   )
                 })() : <DistributionTable d={view.distribution} />}
@@ -961,7 +962,7 @@ export default function App() {
                 <div className="dist-receipt">
                   <span className="dist-amt mono">{view.myDistribution.amount.toLocaleString()} cBTC</span>
                   <span className="dist-receipt-sub">
-                    on {view.myDistribution.shares.toLocaleString()} shares · @ {view.myDistribution.perShare.toFixed(4)} cBTC/share · {view.myDistribution.declaredAt}
+                    on {view.myDistribution.shares.toLocaleString()} shares · @ {fmtRate(view.myDistribution.perShare)} cBTC/share · {view.myDistribution.declaredAt}
                   </span>
                 </div>
                 <p className="panel-note">
@@ -1009,7 +1010,7 @@ function DistributionTable({ d }: { d: DistributionSummary }) {
   return (
     <>
       <div className="dist-summary mono">
-        <span><strong>{d.total.toLocaleString()} cBTC</strong> paid · {d.recipients.length} holders · @ {d.perShare.toFixed(4)} / share · {d.declaredAt}</span>
+        <span><strong>{d.total.toLocaleString()} cBTC</strong> paid · {d.recipients.length} holders · @ {fmtRate(d.perShare)} / share · {d.declaredAt}</span>
       </div>
       <table className="inv-table dist-preview">
         <thead><tr><th>Holder</th><th>Shares</th><th>Received</th></tr></thead>
