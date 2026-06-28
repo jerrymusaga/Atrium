@@ -200,7 +200,17 @@ export const mockClient: LedgerClient = {
     const visibleHoldings =
       isSeller || isRegulator ? allHoldings : allHoldings.filter((h) => h.owner === viewer)
 
-    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, capTable: capTableFor(viewer, isSeller || isRegulator), settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null }
+    // Unified on-chain audit trail (founder / oversight lens): grants → disclosures → settlement.
+    const lifecycle = isSeller || isRegulator
+      ? [
+          { at: '09:02', kind: 'grant' as const, actor: 'Boranic', detail: `granted access up to “${tierName(1)}”` },
+          { at: '09:05', kind: 'grant' as const, actor: 'Meridian', detail: `granted access up to “${tierName(2)}”` },
+          ...accessTrail.map((e) => ({ at: e.accessedAt, kind: 'disclosure' as const, actor: e.buyerLabel, detail: `opened “${e.docTitle}”` })),
+          ...(settled ? [{ at: '', kind: 'settlement' as const, actor: 'Registry', detail: 'cash ↔ equity swapped atomically — conditional close executed' }] : []),
+        ].sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : 1))
+      : undefined
+
+    return { deal, documents, accessTrail: trail, offers: visibleOffers, holdings: visibleHoldings, capTable: capTableFor(viewer, isSeller || isRegulator), settled, kyc: isSeller || isRegulator ? null : kyc[viewer] ?? null, lifecycle }
   },
 
   async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {
@@ -210,7 +220,7 @@ export const mockClient: LedgerClient = {
     const doc = docs.find((d) => d.docId === docId)
     if (!doc) throw new Error('unknown document')
     if (!isSeller && maxTier < doc.tier) {
-      throw new Error(`Sealed. Your grant covers tier ${maxTier}; "${doc.title}" is tier ${doc.tier}. The key service will not release the key.`)
+      throw new Error(`Access restricted — insufficient privileges. Your grant covers tier ${maxTier}; "${doc.title}" is tier ${doc.tier}. The key service will not release the key.`)
     }
     if (!isSeller) {
       const label = viewer === BUYER_A ? 'Boranic' : viewer === BUYER_B ? 'Meridian' : viewer
@@ -228,7 +238,7 @@ export const mockClient: LedgerClient = {
     const authorized = docs.filter((d) => tier >= d.tier)
     const wantsTier2 = /ebitda|revenue|margin|valuation|cash|backlog|financ|profit/i.test(question)
     const answer = wantsTier2 && tier < 2
-      ? `The audited financials — revenue, EBITDA, margins, valuation — are in the Tier 2 documents. Your access grant covers Tier ${tier}, so the copilot was not given those documents and cannot answer. Request tier-2 access from the seller.`
+      ? `Access restricted — insufficient privileges. The audited financials (revenue, EBITDA, margins, valuation) sit in the “${tierName(2)}” tier. Your grant covers “${tierName(tier)}”, so the copilot was never given those documents and cannot answer. Request that tier from the founder.`
       : `(offline copilot) Based on the ${authorized.length} document(s) your grant authorizes: ${authorized.map((d) => d.title).join(', ')}. ${tier >= 2 ? 'FY2025 revenue was $41.8M (+68% YoY) with $6.9M adj. EBITDA; the 120,000-share stake is offered at $35.00 (~$4.2M).' : 'Halden Robotics is a warehouse-automation company; the teaser covers growth and the stake on offer. Deeper figures are gated to tier 2.'}`
     return { answer, authorizedDocs: authorized.map((d) => d.title), tier: viewer === SELLER ? 'all tiers' : `tier ${tier}` }
   },

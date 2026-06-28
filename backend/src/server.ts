@@ -171,6 +171,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
     // Conditions panel + per-investor summary (for the founder / seller lens)
     let conditions: any = undefined
     let investorsDetail: any[] | undefined = undefined
+    let lifecycle: any[] | undefined = undefined
     if (isSeller && dealC) {
       const raiseTarget = num(dealC.raiseTarget ?? 0)
       const commitments = sellerView.filter((c) => entityOf(c.templateId) === 'Commitment')
@@ -216,6 +217,31 @@ app.get('/deals/:dealId/view', async (req, res) => {
         if (entry) entry.hasBid = true
       }
       investorsDetail = Array.from(investorMap.values())
+
+      // Unified on-chain audit trail — every ledger event in one timeline.
+      // Grants · disclosures · commitments · approvals · settlement, in the order they hit Canton.
+      const ev: { at: string; kind: string; actor: string; detail: string }[] = []
+      for (const g of grantContracts) {
+        const a = g.createArgument
+        ev.push({ at: String(a.grantedAt), kind: 'grant', actor: labelFor(a.buyer), detail: `granted access up to “${tierLabelOf(dealTiers, num(a.maxTier))}”` })
+      }
+      for (const c of byEntity('AccessEvent')) {
+        const a = c.createArgument
+        const doc = docManifest.find((d: any) => d.docId === a.docId)
+        ev.push({ at: String(a.accessedAt), kind: 'disclosure', actor: labelFor(a.buyer), detail: `opened “${doc?.title ?? a.docId}”` })
+      }
+      for (const c of commitments) {
+        const a = c.createArgument
+        ev.push({ at: String(a.committedAt), kind: 'commitment', actor: labelFor(a.investor), detail: `committed ${num(a.amount)} cBTC toward the raise` })
+      }
+      for (const c of approvals) {
+        const a = c.createArgument
+        ev.push({ at: String(a.approvedAt), kind: 'approval', actor: a.role, detail: `${a.role} approval recorded on-ledger` })
+      }
+      ev.sort((x, y) => Date.parse(x.at) - Date.parse(y.at))
+      // Settlement caps the timeline (Holding carries no timestamp; it is always the last event).
+      if (settled) ev.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' })
+      lifecycle = ev.map((e) => ({ ...e, at: e.at ? e.at.slice(11, 16) : '' }))
     }
 
     // Commitment for a buyer lens
@@ -230,7 +256,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity), raiseTarget: num(dealC.raiseTarget ?? 0), tiers: dealTiers } : null,
       documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party),
-      conditions, myCommitment, myApproval, investorsDetail,
+      conditions, myCommitment, myApproval, investorsDetail, lifecycle,
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -249,7 +275,7 @@ app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
       const grant = (await acsOf(party)).find((c) => entityOf(c.templateId) === 'AccessGrant')
       const tier = grant ? num(grant.createArgument.maxTier) : 0
       if (tier < meta.tier) {
-        return res.status(403).json({ error: `Sealed. Your grant covers tier ${tier}; "${meta.title}" is tier ${meta.tier}. The key service will not release the key.`, sealed: true, tier: meta.tier })
+        return res.status(403).json({ error: `Access restricted — insufficient privileges. Your grant covers tier ${tier}; "${meta.title}" is tier ${meta.tier}. The key service will not release the key.`, sealed: true, tier: meta.tier })
       }
       if (grant) await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId })
     }
@@ -302,7 +328,7 @@ app.post('/deals/:dealId/ask', async (req, res) => {
     const system = `You are the diligence copilot inside Atrium, a private capital markets OS on Canton Network.
 You are answering for the party "${prefix}". You may ONLY use the documents below — they are EXACTLY what this party's on-ledger access grant authorizes. Do not use outside knowledge and never invent figures.
 The deal's named access tiers, in order, are: ${dealTiers.map((t, i) => `"${t}" (tier ${i + 1})`).join(', ')}.
-If the question needs information not in these documents (it lives in a higher access tier this party was not granted), say so plainly: name the tier it likely sits in (e.g. ${named(Math.min(tier + 1, dealTiers.length))}) and that their grant does not cover it. Be concise and cite the specific figures you use.
+If the question needs information that is not in these documents, do NOT answer from outside knowledge. Reply that access is restricted: state plainly that the answer sits in a higher access tier (e.g. ${named(Math.min(tier + 1, dealTiers.length))}) and that this party has insufficient privileges to view it — recommend requesting that tier from the founder. Be concise and cite the specific figures you use from the authorized documents.
 
 AUTHORIZED DOCUMENTS:
 ${context || '(none — this party has no document access)'}`

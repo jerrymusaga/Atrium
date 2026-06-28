@@ -3,7 +3,7 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
-import type { AskResult, CloseAttestation, DealView, DocContent, ReadinessResult, Viewer } from './types'
+import type { AskResult, CloseAttestation, DealView, DocContent, LifecycleKind, ReadinessResult, Viewer } from './types'
 
 const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
 
@@ -433,17 +433,41 @@ export default function App() {
           </section>
         )}
 
-        {/* ── Access trail ── */}
-        {!isApprover && !noDeal && (
+        {/* ── On-chain audit trail (founder / oversight lens) ── */}
+        {(isSeller || current.role === 'regulator') && !noDeal && view?.lifecycle && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>On-chain audit trail</h2>
+              <span className="count mono">{view.lifecycle.length} ledger events</span>
+            </div>
+            <p className="panel-note">
+              Every state change on Canton, in order: access grants · document disclosures ·
+              cBTC commitments · governance approvals · settlement. Tamper-proof and ledger-timestamped —
+              the complete record of how this deal reached close.
+            </p>
+            <ol className="audit">
+              {view.lifecycle.map((e, i) => (
+                <li key={i} className={`audit-item audit-${e.kind}`}>
+                  <span className="audit-rail"><span className="audit-dot" /></span>
+                  <span className="audit-time mono">{e.at || 'close'}</span>
+                  <span className="audit-kind mono">{auditKindLabel(e.kind)}</span>
+                  <span className="audit-body"><strong>{e.actor}</strong> {e.detail}</span>
+                </li>
+              ))}
+              {view.lifecycle.length === 0 && <li className="empty">No ledger events recorded yet.</li>}
+            </ol>
+          </section>
+        )}
+
+        {/* ── Buyer: your own access trail ── */}
+        {current.role === 'buyer' && !noDeal && (
           <section className="panel">
             <div className="panel-head">
               <h2>Access trail</h2>
               <span className="count mono">{view?.accessTrail.length ?? 0} events</span>
             </div>
             <p className="panel-note">
-              {current.role === 'buyer'
-                ? 'You see only your own accesses. You cannot see who else is in the room.'
-                : 'Tamper-proof, ledger-timestamped: who opened what, when.'}
+              You see only your own accesses. You cannot see who else is in the room.
             </p>
             <ul className="trail">
               {view?.accessTrail.map((e, i) => (
@@ -803,6 +827,16 @@ export default function App() {
       </main>
     </div>
   )
+}
+
+function auditKindLabel(kind: LifecycleKind) {
+  switch (kind) {
+    case 'grant':      return 'GRANT'
+    case 'disclosure': return 'DISCLOSE'
+    case 'commitment': return 'COMMIT'
+    case 'approval':   return 'APPROVE'
+    case 'settlement': return 'SETTLE'
+  }
 }
 
 function viewerBlurb(role: string) {

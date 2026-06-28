@@ -304,6 +304,31 @@ body {
 .t-doc { color: var(--steel); }
 .empty { color: var(--muted); }
 
+/* ---- On-chain audit trail (unified lifecycle timeline) ---- */
+.audit { list-style: none; margin: 4px 0 0; padding: 0; }
+.audit-item { position: relative; display: grid; grid-template-columns: 26px 48px 78px 1fr; align-items: center; gap: 10px; padding: 9px 0; font-size: 13px; }
+.audit-rail { position: relative; display: flex; justify-content: center; align-self: stretch; }
+.audit-rail::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); background: var(--line); }
+.audit-item:first-child .audit-rail::before { top: 50%; }
+.audit-item:last-child .audit-rail::before { bottom: 50%; }
+.audit-dot { position: relative; z-index: 1; width: 11px; height: 11px; border-radius: 50%; background: var(--ink); border: 2px solid var(--steel-dim); box-shadow: 0 0 0 3px var(--ink); }
+.audit-time { color: var(--muted); font-size: 11.5px; }
+.audit-kind { font-size: 10px; letter-spacing: 1px; padding: 2px 7px; border-radius: 6px; text-align: center; color: var(--muted); border: 1px solid var(--line); background: var(--ink); }
+.audit-body { color: var(--text); line-height: 1.45; }
+.audit-body strong { color: var(--text); font-weight: 600; }
+/* per-kind accents */
+.audit-grant .audit-dot { border-color: var(--steel); }
+.audit-grant .audit-kind { color: var(--steel); border-color: var(--steel-dim); }
+.audit-disclosure .audit-dot { border-color: #9cc3df; }
+.audit-disclosure .audit-kind { color: #9cc3df; }
+.audit-commitment .audit-dot { border-color: var(--seal); }
+.audit-commitment .audit-kind { color: var(--seal); border-color: rgba(198,138,62,.4); }
+.audit-approval .audit-dot { border-color: var(--settled); }
+.audit-approval .audit-kind { color: var(--settled); border-color: rgba(79,168,139,.4); }
+.audit-settlement .audit-dot { background: var(--settled); border-color: var(--settled); box-shadow: 0 0 0 3px var(--ink), 0 0 14px rgba(79,168,139,.6); }
+.audit-settlement .audit-kind { color: var(--ink); background: var(--settled); border-color: var(--settled); font-weight: 600; }
+.audit-settlement .audit-body { color: var(--settled); font-weight: 500; }
+
 /* ---- Offers + close ---- */
 .chip { font-size: 11px; color: var(--muted); }
 .chip.settled { color: var(--settled); }
