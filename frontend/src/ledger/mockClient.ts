@@ -43,7 +43,7 @@ const tierName = (t: number) => deal.tiers?.[t - 1] ?? `Tier ${t}`
 // Build a small, valid single-page PDF (Helvetica) from ASCII lines and return it as a data URL,
 // so the seeded data room ships a REAL openable file with no binary asset to bundle.
 function makePdf(title: string, lines: string[]): string {
-  const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+  const esc = (s: string) => s.replace(/[^\x20-\x7E]/g, '?').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
   let content = `BT\n/F1 15 Tf\n56 748 Td\n(${esc(title)}) Tj\n/F1 10 Tf\n0 -26 Td\n`
   for (const ln of lines) content += `(${esc(ln)}) Tj\n0 -15 Td\n`
   content += 'ET'
@@ -260,12 +260,30 @@ export const mockClient: LedgerClient = {
     commitments = { ...commitments, [viewer]: { amount, committedAt: new Date().toTimeString().slice(0, 5) } }
   },
 
-  // Governance role records its on-ledger approval — required for the conditional close.
-  async approve(viewer: PartyId, role: string) {
+  // Governance role signs off: records the on-ledger Approval AND anchors a signed resolution PDF
+  // (tier 3, hash-anchored, integrity-covered) — the modeled e-signature ceremony.
+  async approve(viewer: PartyId, role: string, sig?: { signedBy: string; envelopeId: string }) {
     const r = String(role).toUpperCase()
     if (!['BOARD', 'LEGAL', 'COMPLIANCE'].includes(r)) throw new Error('Unknown approval role')
-    await wait(150)
-    approvals = { ...approvals, [r]: { role: r, approvedAt: new Date().toTimeString().slice(0, 5) } }
+    await wait(300)
+    const signer = (sig?.signedBy ?? viewer).trim() || viewer
+    const envelopeId = sig?.envelopeId ?? `ATR-${r}-${Date.now().toString(36).toUpperCase()}`
+    const when = new Date().toTimeString().slice(0, 5)
+    approvals = { ...approvals, [r]: { role: r, approvedAt: when } }
+    const docId = `resolution-${r.toLowerCase()}`
+    if (!docs.some((d) => d.docId === docId)) {
+      const pdf = makePdf(`HALDEN ROBOTICS - ${r} RESOLUTION`, [
+        '', `Deal      ${deal.title}`, 'Resolution',
+        `  The ${r} hereby approves the closing of the Series A on the`,
+        '  terms in the Series A term sheet, subject to the remaining',
+        '  on-ledger closing conditions.', '',
+        `Signed    ${signer}`, `Role      ${r}`, `Date      ${when}`, `Envelope  ${envelopeId}`, '',
+        'Recorded as an on-ledger Approval contract on Canton Network. This',
+        'signed resolution is encrypted in the data room and its hash is',
+        'anchored on-ledger for tamper-evidence.',
+      ])
+      docs.push({ docId, title: `${r} resolution — ${signer}`, tier: 3, contentHash: 'sha256:' + Math.random().toString(16).slice(2, 18), content: '', mime: 'application/pdf', dataUrl: pdf })
+    }
   },
 
   // Founder sets up the room: rename tiers, set the raise target + title. Mutates the

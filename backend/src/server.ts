@@ -10,7 +10,7 @@ import express from 'express'
 import {
   activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
-import { decryptDocument, docMeta, loadVault, readDocument, recomputeHash, registerDocument, seedVault, tamperDocument } from './vault.js'
+import { decryptDocument, docMeta, loadVault, readDocument, recomputeHash, registerDocument, resolutionPdf, seedVault, tamperDocument } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
@@ -499,15 +499,31 @@ app.post('/deals/:dealId/commit', async (req, res) => {
 app.post('/deals/:dealId/approve', async (req, res) => {
   try {
     await ensurePkg()
-    const { party: prefix, role } = req.body ?? {}
+    const { party: prefix, role, signedBy } = req.body ?? {}
     if (!prefix || !role) return res.status(400).json({ error: 'party and role required' })
+    const ROLE = String(role).toUpperCase()
     const validRoles = ['BOARD', 'LEGAL', 'COMPLIANCE']
-    if (!validRoles.includes(String(role).toUpperCase())) return res.status(400).json({ error: `role must be one of ${validRoles.join(', ')}` })
+    if (!validRoles.includes(ROLE)) return res.status(400).json({ error: `role must be one of ${validRoles.join(', ')}` })
     const approver = await partyId(prefix)
     const founder  = await partyId(SELLER)
+    const seller   = await partyId(SELLER)
     const now = new Date().toISOString()
-    await create(approver, tid('Approval'), { approver, role: String(role).toUpperCase(), dealId: DEAL_ID, approvedAt: now, founder })
-    res.json({ approved: true, role: String(role).toUpperCase() })
+
+    // Sign the resolution off-chain (modeled): generate the signed PDF, encrypt it in the vault,
+    // and anchor its hash on-ledger as a tier-3 (Legal) Document — tamper-evident like any doc.
+    const signer = String(signedBy ?? prefix).trim() || prefix
+    const envelopeId = String(req.body?.envelopeId ?? `ATR-${ROLE}-${Date.now().toString(36).toUpperCase()}`)
+    const dealC = (await acsOf(seller)).find((c) => entityOf(c.templateId) === 'Deal')?.createArgument
+    const dealTitle = dealC ? String(dealC.title) : DEAL_ID
+    const resDocId = `resolution-${ROLE.toLowerCase()}`
+    const { hash, pointer } = registerDocument(resDocId, `${ROLE} resolution — ${signer}`, 3, resolutionPdf(ROLE, signer, dealTitle, now, envelopeId), 'application/pdf')
+    if (!(await acsOf(seller)).some((c) => entityOf(c.templateId) === 'Document' && c.createArgument.docId === resDocId)) {
+      await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: resDocId, title: `${ROLE} resolution — ${signer}`, tier: '3', contentHash: hash, blobPointer: pointer })
+    }
+
+    // The on-ledger Approval is the FACT the close gate verifies (unchanged template).
+    await create(approver, tid('Approval'), { approver, role: ROLE, dealId: DEAL_ID, approvedAt: now, founder })
+    res.json({ approved: true, role: ROLE, envelopeId, resolutionDocId: resDocId, hash })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 

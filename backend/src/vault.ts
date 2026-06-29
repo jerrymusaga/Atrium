@@ -156,7 +156,7 @@ Total,1000000,100.0%,`
 // Build a small, valid single-page PDF (Helvetica) from ASCII lines, as a Buffer — a real
 // openable file in the data room with no binary asset to ship.
 function makePdf(title: string, lines: string[]): Buffer {
-  const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+  const esc = (s: string) => s.replace(/[^\x20-\x7E]/g, '?').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
   let content = `BT\n/F1 15 Tf\n56 748 Td\n(${esc(title)}) Tj\n/F1 10 Tf\n0 -26 Td\n`
   for (const ln of lines) content += `(${esc(ln)}) Tj\n0 -15 Td\n`
   content += 'ET'
@@ -197,6 +197,29 @@ const TERM_SHEET_PDF = makePdf('HALDEN ROBOTICS - SERIES A TERM SHEET (CONFIDENT
   'This term sheet is non-binding except for the confidentiality and',
   'exclusivity provisions. Tier: Legal.',
 ])
+
+// A signed governance resolution as a real PDF — produced when a Board/Legal/Compliance role
+// signs off. The bytes are encrypted in the vault and their hash is anchored on-ledger (as a
+// Document), so the approval's signed artifact is tamper-evident exactly like any other doc.
+export function resolutionPdf(role: string, signer: string, dealTitle: string, whenISO: string, envelopeId: string): Buffer {
+  return makePdf(`HALDEN ROBOTICS - ${role} RESOLUTION`, [
+    '',
+    `Deal      ${dealTitle}`,
+    `Resolution`,
+    `  The ${role} hereby approves the closing of the Series A on the`,
+    `  terms in the Series A term sheet, subject to the remaining`,
+    `  on-ledger closing conditions.`,
+    '',
+    `Signed    ${signer}`,
+    `Role      ${role}`,
+    `Date      ${whenISO}`,
+    `Envelope  ${envelopeId}`,
+    '',
+    `Recorded as an on-ledger Approval contract on Canton Network. This`,
+    `signed resolution is encrypted in the data room and its hash is`,
+    `anchored on-ledger for tamper-evidence.`,
+  ])
+}
 
 export function seedVault() {
   if (!store.has('teaser')) registerDocument('teaser', 'Investment teaser', 1, TEASER)

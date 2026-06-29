@@ -15,6 +15,23 @@ function fmtRate(n: number) {
   return n >= 1 ? n.toFixed(2) : n.toPrecision(2)
 }
 
+// The human-readable resolution an approver signs in the ceremony modal.
+function resolutionText(role: string, signer: string) {
+  return `HALDEN ROBOTICS — ${role} RESOLUTION
+
+Resolution
+  The ${role} hereby approves the closing of the Series A on the terms
+  in the Series A term sheet, subject to the remaining on-ledger
+  closing conditions.
+
+Signed by:  ${signer}
+Role:       ${role}
+
+By signing, this resolution is recorded as an on-ledger Approval on
+Canton, and the signed PDF is encrypted in the data room with its hash
+anchored on-ledger for tamper-evidence.`
+}
+
 // Suggest a download filename extension from the media type.
 function extFor(mime?: string) {
   if (!mime) return ''
@@ -53,6 +70,8 @@ export default function App() {
   const [commitAmt, setCommitAmt] = useState('')
   const [committing, setCommitting] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [signing, setSigning] = useState(false)
+  const [signerName, setSignerName] = useState('')
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null)
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
   const [verifying, setVerifying] = useState(false)
@@ -159,13 +178,17 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) } finally { setCommitting(false) }
   }
 
-  async function approve() {
+  async function signAndApprove() {
+    const name = signerName.trim()
+    if (!name) return
     setApproving(true)
     setMsg(null)
     try {
-      await client.approve(viewer, approverRole)
+      const envelopeId = `ATR-${approverRole}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+      await client.approve(viewer, approverRole, { signedBy: name, envelopeId })
+      setSigning(false); setSignerName('')
       await load(true)
-      setMsg(`${approverRole} approval recorded on-ledger — the founder's close gate now reflects this.`)
+      setMsg(`${approverRole} resolution signed by ${name} — recorded on-ledger and the signed PDF anchored on Canton (envelope ${envelopeId}).`)
     } catch (e) { setMsg((e as Error).message) } finally { setApproving(false) }
   }
 
@@ -422,18 +445,30 @@ export default function App() {
               </span>
             </div>
             {view?.myApproval ? (
-              <p className="panel-note">
-                Your <strong>{view.myApproval.role}</strong> approval was recorded on-ledger at {view.myApproval.approvedAt}.
-                The founder's close gate will include this when all conditions are met.
-              </p>
+              <>
+                <p className="panel-note">
+                  Your <strong>{view.myApproval.role}</strong> resolution was signed and recorded on-ledger at {view.myApproval.approvedAt}.
+                  A signed PDF resolution is anchored on Canton — tamper-evident and included in the audit trail + integrity check.
+                </p>
+                {(() => {
+                  const resDoc = view.documents.find((d) => d.docId === `resolution-${approverRole.toLowerCase()}`)
+                  return resDoc ? (
+                    <div className="sig-receipt">
+                      <span className="sig-check mono">✓ SIGNED</span>
+                      <span className="sig-title">{resDoc.title}</span>
+                      <span className="sig-hash mono">{resDoc.contentHash}</span>
+                    </div>
+                  ) : null
+                })()}
+              </>
             ) : (
               <>
                 <p className="panel-note">
-                  Review the fundraise. If satisfied, record your on-ledger approval — the founder cannot
-                  close the deal until all required roles have signed.
+                  Review the fundraise. If satisfied, sign the resolution — the founder cannot close
+                  the deal until all required roles have signed. Signing anchors a tamper-evident PDF on Canton.
                 </p>
-                <button className="btn solid wide" disabled={approving} onClick={approve}>
-                  {approving ? 'Recording approval on-ledger…' : `Record ${approverRole} approval`}
+                <button className="btn solid wide" disabled={approving} onClick={() => { setSignerName(''); setSigning(true) }}>
+                  ✍ Review &amp; sign the {approverRole} resolution
                 </button>
               </>
             )}
@@ -1057,6 +1092,39 @@ export default function App() {
               <div className="doc-modal-foot mono">
                 🔓 AES-256-GCM · {doc.bytes.toLocaleString()} bytes ciphertext · {doc.hash.slice(0, 23)}… — the key service
                 released this because the ledger confirms your grant covers tier {doc.tier}.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── e-signature ceremony (Board / Legal / Compliance) ── */}
+        {signing && isApprover && (
+          <div className="doc-modal-backdrop" onClick={() => { if (!approving) setSigning(false) }}>
+            <div className="doc-modal sign-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="doc-modal-head">
+                <div>
+                  <div className="eyebrow">e-signature · modeled (DocuSign in production)</div>
+                  <h3>{approverRole} resolution</h3>
+                </div>
+                <button className="btn ghost" disabled={approving} onClick={() => setSigning(false)}>Cancel</button>
+              </div>
+              <pre className="doc-content">{resolutionText(approverRole, signerName.trim() || '—')}</pre>
+              <div className="sign-row">
+                <input
+                  className="field"
+                  placeholder="Type your full name to sign"
+                  value={signerName}
+                  autoFocus
+                  onChange={(e) => setSignerName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && signerName.trim()) signAndApprove() }}
+                />
+                <button className="btn solid" disabled={approving || !signerName.trim()} onClick={signAndApprove}>
+                  {approving ? 'Signing & recording…' : '✍ Sign & record on Canton'}
+                </button>
+              </div>
+              <div className="doc-modal-foot mono">
+                Signing generates a PDF resolution, encrypts it in the data room, anchors its hash on Canton,
+                and creates the on-ledger Approval the conditional close verifies.
               </div>
             </div>
           </div>

@@ -484,6 +484,15 @@ body {
 .doc-download { margin: 14px 22px 0; justify-content: center; }
 .doc-modal-foot { color: var(--settled); font-size: 11px; line-height: 1.6; padding: 14px 22px 20px; }
 
+/* ---- e-signature ceremony ---- */
+.sign-modal .doc-content { white-space: pre-wrap; max-height: 40vh; }
+.sign-row { display: flex; gap: 8px; margin: 14px 22px 0; }
+.sign-row .field { flex: 1; }
+.sig-receipt { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 11px 13px; border-radius: 10px; border: 1px solid rgba(79,168,139,.4); background: rgba(79,168,139,.08); font-size: 12.5px; }
+.sig-check { color: var(--settled); font-weight: 700; }
+.sig-title { color: var(--text); }
+.sig-hash { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+
 /* ---- Toast ---- */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--seal); color: #1a1206; padding: 11px 18px; border-radius: 10px; font-size: 13px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 
