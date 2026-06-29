@@ -147,7 +147,60 @@ Implied valuation at the offered terms
 If you can read this paragraph, the key service released your AES-256-GCM key —
 which it only does because the ledger confirms your AccessGrant covers Tier 2.`
 
+const CAP_TABLE_CSV = `Holder,Shares,Ownership %,Class
+Founders,600000,60.0%,Common
+ESOP Pool,280000,28.0%,Options
+Series A (on offer),120000,12.0%,Preferred
+Total,1000000,100.0%,`
+
+// Build a small, valid single-page PDF (Helvetica) from ASCII lines, as a Buffer — a real
+// openable file in the data room with no binary asset to ship.
+function makePdf(title: string, lines: string[]): Buffer {
+  const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+  let content = `BT\n/F1 15 Tf\n56 748 Td\n(${esc(title)}) Tj\n/F1 10 Tf\n0 -26 Td\n`
+  for (const ln of lines) content += `(${esc(ln)}) Tj\n0 -15 Td\n`
+  content += 'ET'
+  const objs = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>',
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+    `<</Length ${content.length}>>\nstream\n${content}\nendstream`,
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets: number[] = []
+  objs.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n` })
+  const xrefStart = pdf.length
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`
+  offsets.forEach((off) => { pdf += `${String(off).padStart(10, '0')} 00000 n \n` })
+  pdf += `trailer\n<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF`
+  return Buffer.from(pdf, 'latin1')
+}
+
+const TERM_SHEET_PDF = makePdf('HALDEN ROBOTICS - SERIES A TERM SHEET (CONFIDENTIAL)', [
+  '',
+  'Issuer            Halden Robotics AS',
+  'Round             Series A (Primary)',
+  'Raise             25 cBTC',
+  'Instrument        HALDEN-EQUITY (Preferred)',
+  'Stake on offer    120,000 shares (~12% fully diluted)',
+  'Pre-money         ~183 cBTC',
+  'Liquidation pref  1.0x, non-participating',
+  'Board             1 investor seat',
+  'Pro-rata rights   Yes, for the lead investor',
+  '',
+  'Closing conditions',
+  '  - Raise target met (25 cBTC committed)',
+  '  - Board + Legal + Compliance approval on-ledger',
+  '  - Settlement: atomic cBTC <-> equity on Canton',
+  '',
+  'This term sheet is non-binding except for the confidentiality and',
+  'exclusivity provisions. Tier: Legal.',
+])
+
 export function seedVault() {
   if (!store.has('teaser')) registerDocument('teaser', 'Investment teaser', 1, TEASER)
   if (!store.has('financials')) registerDocument('financials', 'Audited financials', 2, FINANCIALS)
+  if (!store.has('cap-table')) registerDocument('cap-table', 'Cap table', 2, CAP_TABLE_CSV, 'text/csv')
+  if (!store.has('term-sheet')) registerDocument('term-sheet', 'Series A term sheet', 3, TERM_SHEET_PDF, 'application/pdf')
 }

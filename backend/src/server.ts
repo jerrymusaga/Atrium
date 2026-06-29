@@ -438,7 +438,8 @@ app.post('/deals/:dealId/distribute', async (req, res) => {
 })
 
 // --- diligence copilot: privacy-bounded AI ---
-const DOC_IDS = ['teaser', 'financials']
+// Text documents the copilot may read (the term-sheet is a PDF/binary, so it is excluded).
+const DOC_IDS = ['teaser', 'financials', 'cap-table']
 app.post('/deals/:dealId/ask', async (req, res) => {
   try {
     await ensurePkg()
@@ -840,6 +841,10 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     // matches the ciphertext byte-for-byte. Placeholders here would falsely read as tampered.
     if (!has('Document', (a) => a.docId === 'teaser')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'teaser', title: 'Investment teaser', tier: '1', contentHash: docMeta('teaser')?.hash ?? 'sha256:aa11', blobPointer: 's3://atrium/halden/teaser.enc' }); did.push('Document:teaser') }
     if (!has('Document', (a) => a.docId === 'financials')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'financials', title: 'Audited financials', tier: '2', contentHash: docMeta('financials')?.hash ?? 'sha256:bb22', blobPointer: 's3://atrium/halden/financials.enc' }); did.push('Document:financials') }
+    // Real sample files (seeded into the vault by seedVault): a cap-table CSV (tier 2) and a
+    // Series A term-sheet PDF (tier 3 / Legal). contentHash MUST be the real vault hash so /verify matches.
+    if (!has('Document', (a) => a.docId === 'cap-table')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'cap-table', title: 'Cap table', tier: '2', contentHash: docMeta('cap-table')?.hash ?? 'sha256:cc33', blobPointer: 's3://atrium/halden/cap-table.enc' }); did.push('Document:cap-table') }
+    if (!has('Document', (a) => a.docId === 'term-sheet')) { await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: 'term-sheet', title: 'Series A term sheet', tier: '3', contentHash: docMeta('term-sheet')?.hash ?? 'sha256:dd44', blobPointer: 's3://atrium/halden/term-sheet.enc' }); did.push('Document:term-sheet') }
 
     let gA = grantFor(boranic)
     if (!gA) { gA = await create(seller, tid('AccessGrant'), { seller, buyer: boranic, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Boranic') }
