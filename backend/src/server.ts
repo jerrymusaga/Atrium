@@ -258,7 +258,14 @@ app.get('/deals/:dealId/view', async (req, res) => {
       }
       for (const c of approvals) {
         const a = c.createArgument
-        ev.push({ at: String(a.approvedAt), kind: 'approval', actor: a.role, detail: `${a.role} approval recorded on-ledger` })
+        // Tie the approval to its signed resolution: show the signer + the on-ledger hash anchor.
+        const resDoc = docManifest.find((d: any) => d.docId === `resolution-${String(a.role).toLowerCase()}`)
+        const signer = resDoc ? String(resDoc.title).split('—').pop()?.trim() : ''
+        const hash = resDoc ? String(resDoc.contentHash) : ''
+        const detail = signer
+          ? `signed the ${a.role} resolution — ${signer}${hash ? ` · ${hash.slice(0, 23)}…` : ''}`
+          : `${a.role} approval recorded on-ledger`
+        ev.push({ at: String(a.approvedAt), kind: 'approval', actor: a.role, detail })
       }
       ev.sort((x, y) => Date.parse(x.at) - Date.parse(y.at))
       // Settlement caps the timeline (Holding carries no timestamp; it is always the last event).

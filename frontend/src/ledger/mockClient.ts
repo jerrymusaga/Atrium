@@ -378,7 +378,15 @@ export const mockClient: LedgerClient = {
           ...investorParties().map((p, i) => ({ at: `09:0${i + 1}`, kind: 'grant' as const, actor: labelOf(p), detail: `granted access up to “${tierName(grants[p] ?? 1)}”` })),
           ...accessTrail.map((e) => ({ at: e.accessedAt, kind: 'disclosure' as const, actor: e.buyerLabel, detail: `opened “${e.docTitle}”` })),
           ...Object.entries(commitments).map(([p, c]) => ({ at: c.committedAt, kind: 'commitment' as const, actor: labelOf(p), detail: `committed ${c.amount} cBTC toward the raise` })),
-          ...Object.values(approvals).map((a) => ({ at: a.approvedAt, kind: 'approval' as const, actor: a.role, detail: `${a.role} approval recorded on-ledger` })),
+          ...Object.values(approvals).map((a) => {
+            const resDoc = docs.find((d) => d.docId === `resolution-${a.role.toLowerCase()}`)
+            const signer = resDoc ? resDoc.title.split('—').pop()?.trim() : ''
+            const hash = resDoc?.contentHash ?? ''
+            return {
+              at: a.approvedAt, kind: 'approval' as const, actor: a.role,
+              detail: signer ? `signed the ${a.role} resolution — ${signer}${hash ? ` · ${hash.slice(0, 23)}…` : ''}` : `${a.role} approval recorded on-ledger`,
+            }
+          }),
           ...(settled ? [{ at: '', kind: 'settlement' as const, actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' }] : []),
         ].sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : 1))
       : undefined
