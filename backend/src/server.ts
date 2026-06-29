@@ -10,11 +10,11 @@ import express from 'express'
 import {
   activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
-import { decryptDocument, docMeta, loadVault, recomputeHash, registerDocument, seedVault, tamperDocument } from './vault.js'
+import { decryptDocument, docMeta, loadVault, readDocument, recomputeHash, registerDocument, seedVault, tamperDocument } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
-app.use(express.json())
+app.use(express.json({ limit: '12mb' }))  // headroom for base64-encoded file uploads
 loadVault()
 seedVault()
 
@@ -302,26 +302,38 @@ app.get('/deals/:dealId/documents/:docId/content', async (req, res) => {
       }
       if (grant) await exercise(party, grant.templateId, grant.contractId, 'RecordAccess', { docId })
     }
-    res.json({ docId, title: meta.title, tier: meta.tier, hash: meta.hash, bytes: meta.bytes, content: decryptDocument(docId) })
+    // Serve text inline; serve real files (pdf/image/…) as base64 + mime for in-browser preview/download.
+    const mime = meta.mime ?? 'text/plain'
+    const isText = mime.startsWith('text/') || mime === 'application/json'
+    if (isText) {
+      res.json({ docId, title: meta.title, tier: meta.tier, hash: meta.hash, bytes: meta.bytes, content: decryptDocument(docId) ?? '', mime })
+    } else {
+      const read = readDocument(docId)
+      res.json({ docId, title: meta.title, tier: meta.tier, hash: meta.hash, bytes: meta.bytes, content: '', mime, dataBase64: read ? read.buffer.toString('base64') : '' })
+    }
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- seller uploads a document at ANY tier ---
+// --- seller uploads a document at ANY tier: typed text OR a real file (pdf/image/…) ---
 app.post('/deals/:dealId/documents', async (req, res) => {
   try {
     await ensurePkg()
-    const { party: prefix, title, tier, content } = req.body ?? {}
+    const { party: prefix, title, tier, content, fileBase64, mime, fileName } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the seller can add documents' })
-    const name = String(title ?? '').trim()
-    const body = String(content ?? '')
+    const name = String(title ?? fileName ?? '').trim()
     const t = Math.max(1, Math.floor(Number(tier) || 1))
-    if (!name || !body) return res.status(400).json({ error: 'title and content required' })
+    const hasFile = typeof fileBase64 === 'string' && fileBase64.length > 0
+    const body = String(content ?? '')
+    if (!name) return res.status(400).json({ error: 'title required' })
+    if (!hasFile && !body) return res.status(400).json({ error: 'content or file required' })
     const seller = await partyId(SELLER)
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'doc'
     const docId = `${slug}-${Date.now().toString(36).slice(-4)}`
-    const { hash, pointer } = registerDocument(docId, name, t, body)
+    const data = hasFile ? Buffer.from(fileBase64, 'base64') : body
+    const docMime = hasFile ? String(mime || 'application/octet-stream') : 'text/plain'
+    const { hash, pointer } = registerDocument(docId, name, t, data, docMime)
     await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId, title: name, tier: String(t), contentHash: hash, blobPointer: pointer })
-    res.json({ docId, title: name, tier: t, hash })
+    res.json({ docId, title: name, tier: t, hash, mime: docMime })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 

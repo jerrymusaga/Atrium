@@ -40,7 +40,7 @@ let deal: Deal = {
 }
 const tierName = (t: number) => deal.tiers?.[t - 1] ?? `Tier ${t}`
 
-type RawDoc = { docId: string; title: string; tier: number; contentHash: string; content: string }
+type RawDoc = { docId: string; title: string; tier: number; contentHash: string; content: string; mime?: string; dataUrl?: string }
 const docs: RawDoc[] = [
   {
     docId: 'teaser', title: 'Investment teaser', tier: 1, contentHash: 'sha256:b52e8f7e1d344718',
@@ -156,14 +156,23 @@ export const mockClient: LedgerClient = {
   },
 
   // Seller adds a document at any tier — encrypted off-ledger (mocked), gated by tier.
-  async addDocument(viewer: PartyId, draft: { title: string; tier: number; content: string }) {
+  // Accepts typed text OR a real uploaded file (pdf/image/…), stored as a data URL in-browser.
+  async addDocument(viewer: PartyId, draft: { title: string; tier: number; content?: string; file?: { name: string; mime: string; dataUrl: string } }) {
     if (viewer !== SELLER) throw new Error('Only the founder can add documents')
-    const title = draft.title.trim()
-    if (!title || !draft.content.trim()) throw new Error('title and content required')
-    await wait(150)
+    const title = (draft.title || draft.file?.name || '').trim()
+    if (!title) throw new Error('title required')
+    if (!draft.file && !draft.content?.trim()) throw new Error('add file or text content')
+    await wait(200)
     const t = Math.max(1, Math.floor(draft.tier || 1))
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'doc'
-    docs.push({ docId: `${slug}-${Date.now().toString(36).slice(-4)}`, title, tier: t, contentHash: 'sha256:' + Math.random().toString(16).slice(2, 18), content: draft.content })
+    docs.push({
+      docId: `${slug}-${Date.now().toString(36).slice(-4)}`,
+      title, tier: t,
+      contentHash: 'sha256:' + Math.random().toString(16).slice(2, 18),
+      content: draft.file ? '' : (draft.content ?? ''),
+      mime: draft.file?.mime,
+      dataUrl: draft.file?.dataUrl,
+    })
   },
 
   // Seller onboards an investor at runtime: register the party + issue an access grant at the
@@ -335,7 +344,8 @@ export const mockClient: LedgerClient = {
       const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       accessTrail = [...accessTrail, { buyer: viewer, buyerLabel: labelOf(viewer), docId, docTitle: doc.title, accessedAt: stamp }]
     }
-    return { docId, title: doc.title, tier: doc.tier, hash: doc.contentHash, bytes: doc.content.length, content: doc.content }
+    const bytes = doc.dataUrl ? Math.floor((doc.dataUrl.split(',')[1]?.length ?? 0) * 0.75) : doc.content.length
+    return { docId, title: doc.title, tier: doc.tier, hash: doc.contentHash, bytes, content: doc.content, mime: doc.mime, dataUrl: doc.dataUrl }
   },
 
   // Offline copilot stand-in (the live backend uses Venice AI). Still demonstrates the key point:

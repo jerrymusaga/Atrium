@@ -45,7 +45,14 @@ export type AccessEvent = {
 
 export type KYC = { level: string; jurisdiction: string }
 
-export type DocContent = { docId: string; title: string; tier: number; hash: string; bytes: number; content: string }
+// A real uploaded file (read in the browser as a data URL) attached to a document draft.
+export type DocFile = { name: string; mime: string; dataUrl: string }
+export type DocContent = {
+  docId: string; title: string; tier: number; hash: string; bytes: number
+  content: string         // decrypted text (for text docs); '' for binary files
+  mime?: string           // when set, the doc is a real file (pdf/image/…)
+  dataUrl?: string        // data: URL for previewing / downloading the decrypted file
+}
 export type AskResult = { answer: string; authorizedDocs: string[]; tier: string }
 
 export type Offer = {

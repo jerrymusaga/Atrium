@@ -1,4 +1,4 @@
-import type { AskResult, CloseAttestation, DealSetup, DealView, DocContent, IntegrityReport, ReadinessResult, Viewer } from '../types'
+import type { AskResult, CloseAttestation, DealSetup, DealView, DocContent, DocFile, IntegrityReport, ReadinessResult, Viewer } from '../types'
 
 // The seam between UI and ledger. The mock implements this entirely in-browser.
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
@@ -16,7 +16,8 @@ export interface LedgerClient {
   // docs, bids, commitments, governance, settlement legs) for recording.
   loadDemo(): Promise<void>
   // Seller adds a document at ANY tier: encrypted off-ledger, hash + tier recorded on-ledger.
-  addDocument(viewer: PartyId, draft: { title: string; tier: number; content: string }): Promise<void>
+  // Either typed `content` (text) OR an uploaded `file` (pdf/image/…) — encrypted the same way.
+  addDocument(viewer: PartyId, draft: { title: string; tier: number; content?: string; file?: DocFile }): Promise<void>
   // Seller onboards a buyer to the deal: ensures the buyer party exists on the ledger and
   // issues an AccessGrant at the given tier. Returns the new party id.
   inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId>

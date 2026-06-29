@@ -18,7 +18,7 @@ const SECRET = process.env.VAULT_SECRET ?? 'atrium-demo-vault-secret'
 // the secret, so a restart restores the ciphertext and the key service re-derives the keys.
 const VAULT_DIR = process.env.VAULT_DIR ?? join(process.cwd(), 'vault')
 
-type Entry = { title: string; tier: number; iv: Buffer; key: Buffer; ciphertext: Buffer; tag: Buffer; hash: string }
+type Entry = { title: string; tier: number; iv: Buffer; key: Buffer; ciphertext: Buffer; tag: Buffer; hash: string; mime: string }
 const store = new Map<string, Entry>()
 
 const keyFor = (docId: string) => createHash('sha256').update(`${SECRET}:${docId}`).digest() // 32 bytes
@@ -29,7 +29,7 @@ function persist(docId: string, e: Entry) {
     if (!existsSync(VAULT_DIR)) mkdirSync(VAULT_DIR, { recursive: true })
     writeFileSync(join(VAULT_DIR, `${docId}.json`), JSON.stringify({
       title: e.title, tier: e.tier, iv: e.iv.toString('hex'), tag: e.tag.toString('hex'),
-      ciphertext: e.ciphertext.toString('base64'), hash: e.hash,
+      ciphertext: e.ciphertext.toString('base64'), hash: e.hash, mime: e.mime,
     }))
   } catch { /* best-effort; the vault still works in-memory this session */ }
 }
@@ -45,20 +45,23 @@ export function loadVault() {
       store.set(docId, {
         title: j.title, tier: Number(j.tier), iv: Buffer.from(j.iv, 'hex'),
         key: keyFor(docId), ciphertext: Buffer.from(j.ciphertext, 'base64'),
-        tag: Buffer.from(j.tag, 'hex'), hash: j.hash,
+        tag: Buffer.from(j.tag, 'hex'), hash: j.hash, mime: j.mime ?? 'text/plain',
       })
     }
   } catch { /* ignore a corrupt/empty vault dir */ }
 }
 
-export function registerDocument(docId: string, title: string, tier: number, plaintext: string) {
+// Encrypt and register a document. `data` is UTF-8 text (typed docs) OR a binary Buffer (uploaded
+// files, e.g. a PDF); `mime` records the media type so the key service can serve it back correctly.
+export function registerDocument(docId: string, title: string, tier: number, data: string | Buffer, mime = 'text/plain') {
   const key = keyFor(docId)
   const iv = ivFor(docId)
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
   const cipher = createCipheriv('aes-256-gcm', key, iv)
-  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const ciphertext = Buffer.concat([cipher.update(buf), cipher.final()])
   const tag = cipher.getAuthTag()
   const hash = 'sha256:' + createHash('sha256').update(Buffer.concat([ciphertext, tag])).digest('hex')
-  const e: Entry = { title, tier, iv, key, ciphertext, tag, hash }
+  const e: Entry = { title, tier, iv, key, ciphertext, tag, hash, mime }
   store.set(docId, e)
   persist(docId, e)
   return { hash, pointer: `s3://atrium-vault/halden/${docId}.enc` }
@@ -66,7 +69,7 @@ export function registerDocument(docId: string, title: string, tier: number, pla
 
 export function docMeta(docId: string) {
   const e = store.get(docId)
-  return e ? { title: e.title, tier: e.tier, hash: e.hash, bytes: e.ciphertext.length + e.tag.length } : null
+  return e ? { title: e.title, tier: e.tier, hash: e.hash, bytes: e.ciphertext.length + e.tag.length, mime: e.mime } : null
 }
 
 // Re-derive the content hash from the ciphertext that is ON DISK RIGHT NOW — independent of the
@@ -92,13 +95,24 @@ export function tamperDocument(docId: string): boolean {
   return true
 }
 
-// Releases the plaintext (the key + ciphertext stay server-side; only the decrypted text leaves).
+// Releases the plaintext TEXT (the key + ciphertext stay server-side). Used by the AI copilot,
+// which only reasons over text documents.
 export function decryptDocument(docId: string): string | null {
   const e = store.get(docId)
   if (!e) return null
   const d = createDecipheriv('aes-256-gcm', e.key, e.iv)
   d.setAuthTag(e.tag)
   return Buffer.concat([d.update(e.ciphertext), d.final()]).toString('utf8')
+}
+
+// Releases the decrypted BYTES + media type — for serving uploaded files (PDF/image/…) back to an
+// authorized viewer. The key service only reaches here after the ledger confirms the grant.
+export function readDocument(docId: string): { buffer: Buffer; mime: string } | null {
+  const e = store.get(docId)
+  if (!e) return null
+  const d = createDecipheriv('aes-256-gcm', e.key, e.iv)
+  d.setAuthTag(e.tag)
+  return { buffer: Buffer.concat([d.update(e.ciphertext), d.final()]), mime: e.mime }
 }
 
 // Canned demo content — tier 1 is the non-confidential teaser; tier 2 is the sensitive financials.

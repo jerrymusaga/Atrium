@@ -29,6 +29,8 @@ export default function App() {
   const [docTitle, setDocTitle] = useState('')
   const [docTier, setDocTier] = useState(1)
   const [docContent, setDocContent] = useState('')
+  const [docFile, setDocFile] = useState<{ name: string; mime: string; dataUrl: string; size: number } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const [addingDoc, setAddingDoc] = useState(false)
   const [settling, setSettling] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -96,14 +98,30 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) }
   }
 
+  function onPickFile(f?: File) {
+    if (!f) return
+    if (f.size > 8 * 1024 * 1024) { setMsg('Keep the file under 8 MB for the demo.'); return }
+    const reader = new FileReader()
+    reader.onload = () => {
+      setDocFile({ name: f.name, mime: f.type || 'application/octet-stream', dataUrl: String(reader.result), size: f.size })
+      if (!docTitle.trim()) setDocTitle(f.name.replace(/\.[^.]+$/, ''))
+    }
+    reader.readAsDataURL(f)
+  }
+  function clearFile() { setDocFile(null); if (fileRef.current) fileRef.current.value = '' }
+
   async function addDoc() {
-    if (!docTitle.trim() || !docContent.trim()) return
+    const name = (docTitle.trim() || docFile?.name || '').trim()
+    if (!name) return
+    if (!docFile && !docContent.trim()) return
     setAddingDoc(true)
     setMsg(null)
     try {
-      await client.addDocument(viewer, { title: docTitle, tier: docTier, content: docContent })
-      const t = docTier; const name = docTitle
-      setDocTitle(''); setDocContent('')
+      await client.addDocument(viewer, docFile
+        ? { title: name, tier: docTier, file: { name: docFile.name, mime: docFile.mime, dataUrl: docFile.dataUrl } }
+        : { title: name, tier: docTier, content: docContent })
+      const t = docTier
+      setDocTitle(''); setDocContent(''); clearFile()
       await load(true)
       setMsg(`Added "${name}" to “${tierName(t)}” — encrypted; only investors granted this tier or higher can decrypt it.`)
     } catch (e) { setMsg((e as Error).message) } finally { setAddingDoc(false) }
@@ -456,8 +474,27 @@ export default function App() {
                     <input className="field doc-tier" type="number" min={1} value={docTier} title="Access tier" onChange={(e) => setDocTier(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
                   )}
                 </div>
-                <textarea className="field add-doc-content" rows={3} placeholder="Document contents — encrypted off-ledger; key released only to investors granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
-                <button className="btn" disabled={addingDoc || !docTitle.trim() || !docContent.trim()} onClick={addDoc}>
+                <label className="file-drop">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    className="file-input"
+                    accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                    onChange={(e) => onPickFile(e.currentTarget.files?.[0])}
+                  />
+                  {docFile ? (
+                    <span className="file-chosen">
+                      📎 {docFile.name} · {(docFile.size / 1024).toFixed(0)} KB
+                      <button className="file-clear" title="Remove file" onClick={(e) => { e.preventDefault(); clearFile() }}>×</button>
+                    </span>
+                  ) : (
+                    <span className="file-prompt">📎 Upload a file — PDF, image, CSV… (encrypted off-ledger, tier-gated)</span>
+                  )}
+                </label>
+                {!docFile && (
+                  <textarea className="field add-doc-content" rows={3} placeholder="…or type the document contents — encrypted off-ledger; key released only to investors granted this tier." value={docContent} onChange={(e) => setDocContent(e.target.value)} />
+                )}
+                <button className="btn" disabled={addingDoc || (!docFile && (!docTitle.trim() || !docContent.trim()))} onClick={addDoc}>
                   {addingDoc ? 'Encrypting & recording…' : `+ Add to “${tierName(docTier)}”`}
                 </button>
               </div>
@@ -991,9 +1028,23 @@ export default function App() {
                 </div>
                 <button className="btn ghost" onClick={() => setDoc(null)}>Close</button>
               </div>
-              <pre className="doc-content">{doc.content}</pre>
+              {doc.dataUrl && doc.mime?.startsWith('image/') ? (
+                <img className="doc-image" src={doc.dataUrl} alt={doc.title} />
+              ) : doc.dataUrl && doc.mime === 'application/pdf' ? (
+                <iframe className="doc-frame" src={doc.dataUrl} title={doc.title} />
+              ) : doc.content ? (
+                <pre className="doc-content">{doc.content}</pre>
+              ) : (
+                <div className="doc-nopreview">
+                  <span className="doc-nopreview-icon">📄</span>
+                  Decrypted — this file type can’t be previewed inline. Download it below.
+                </div>
+              )}
+              {doc.dataUrl && (
+                <a className="btn ghost doc-download" href={doc.dataUrl} download={doc.title}>⬇ Download decrypted file</a>
+              )}
               <div className="doc-modal-foot mono">
-                🔓 AES-256-GCM · {doc.bytes} bytes ciphertext · {doc.hash.slice(0, 23)}… — the key service
+                🔓 AES-256-GCM · {doc.bytes.toLocaleString()} bytes ciphertext · {doc.hash.slice(0, 23)}… — the key service
                 released this because the ledger confirms your grant covers tier {doc.tier}.
               </div>
             </div>

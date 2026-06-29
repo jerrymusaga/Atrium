@@ -26,8 +26,13 @@ export const httpClient: LedgerClient = {
     return j<Viewer[]>(`/viewers`)
   },
 
-  async addDocument(viewer: PartyId, draft: { title: string; tier: number; content: string }) {
-    await post(`/deals/${DEAL}/documents`, { party: viewer, ...draft })
+  async addDocument(viewer: PartyId, draft: { title: string; tier: number; content?: string; file?: { name: string; mime: string; dataUrl: string } }) {
+    if (draft.file) {
+      const fileBase64 = draft.file.dataUrl.includes(',') ? draft.file.dataUrl.split(',')[1] : draft.file.dataUrl
+      await post(`/deals/${DEAL}/documents`, { party: viewer, title: draft.title, tier: draft.tier, fileBase64, mime: draft.file.mime, fileName: draft.file.name })
+    } else {
+      await post(`/deals/${DEAL}/documents`, { party: viewer, title: draft.title, tier: draft.tier, content: draft.content })
+    }
   },
   async inviteBuyer(viewer: PartyId, buyerName: string, tier: number): Promise<PartyId> {
     const r = await post(`/deals/${DEAL}/invite`, { party: viewer, buyerName, tier }) as any
@@ -53,7 +58,9 @@ export const httpClient: LedgerClient = {
     await post(`/deals/${DEAL}/seed`, {})
   },
   async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {
-    return j<DocContent>(`/deals/${DEAL}/documents/${docId}/content?party=${encodeURIComponent(viewer)}`)
+    const r = await j<DocContent & { dataBase64?: string }>(`/deals/${DEAL}/documents/${docId}/content?party=${encodeURIComponent(viewer)}`)
+    const dataUrl = r.dataBase64 && r.mime ? `data:${r.mime};base64,${r.dataBase64}` : r.dataUrl
+    return { ...r, dataUrl }
   },
   async ask(viewer: PartyId, question: string): Promise<AskResult> {
     return post(`/deals/${DEAL}/ask`, { party: viewer, question }) as Promise<AskResult>
