@@ -160,8 +160,15 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const registry = await partyId('Registry')
     const regAcs = await acsOf(registry)
     const regHoldings = regAcs.filter((c) => entityOf(c.templateId) === 'Holding').map((c) => c.createArgument)
-    const holdings = regHoldings.map((h: any) => ({ owner: h.owner, ownerLabel: labelFor(h.owner), instrument: h.instrument, amount: num(h.amount) }))
     const settled = regHoldings.some((h: any) => h.instrument === 'cBTC' && labelFor(h.owner) === SELLER)
+    // The two atomic legs are the pooled round capital vs the 12% stake — show them as aggregates
+    // (the per-investor split lives in the cap table), matching the pro-rata model.
+    const holdings = regHoldings.map((h: any) => {
+      let ownerLabel = labelFor(h.owner)
+      if (!settled && h.instrument === 'cBTC') ownerLabel = 'Investors (committed)'
+      if (settled && h.instrument === 'HALDEN-EQUITY') ownerLabel = 'Round investors'
+      return { owner: h.owner, ownerLabel, instrument: h.instrument, amount: num(h.amount) }
+    })
 
     const certs = regAcs.filter((c) => entityOf(c.templateId) === 'ShareCertificate').map((c) => c.createArgument)
     const totalShares = certs.reduce((s, c: any) => s + num(c.shares), 0) || 1
@@ -708,9 +715,22 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     }
 
     await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
+
+    // Allocate the round PRO-RATA: archive the founder's stake cert and issue a ShareCertificate
+    // to each committed investor in proportion to their cBTC commitment (no single winner).
+    const commitmentsForAlloc = (await acsOf(seller)).filter((c) => entityOf(c.templateId) === 'Commitment')
+    const totalCommitted = commitmentsForAlloc.reduce((s, c) => s + num(c.createArgument.amount), 0) || 1
     const stake = regAcs.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === seller && c.createArgument.instrument === 'HALDEN-EQUITY')
-    if (stake) await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: buyer })
-    res.json({ settled: true, atomic: true, settlementRef: ref, cbtcToFounder: 4200000, equityToInvestor: 120000 })
+    if (stake && commitmentsForAlloc.length > 0) {
+      await exercise(registry, stake.templateId, stake.contractId, 'Archive', {})
+      for (const c of commitmentsForAlloc) {
+        const shares = Math.round((num(c.createArgument.amount) / totalCommitted) * 120000)
+        await create(registry, tid('ShareCertificate'), { registrar: registry, holder: c.createArgument.investor, instrument: 'HALDEN-EQUITY', shares: shares.toFixed(1) })
+      }
+    } else if (stake) {
+      await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: buyer })
+    }
+    res.json({ settled: true, atomic: true, settlementRef: ref, cbtcToFounder: totalCommitted, equityToInvestor: 120000, proRata: commitmentsForAlloc.length })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -725,10 +745,16 @@ app.post('/deals/:dealId/reset-close', async (_req, res) => {
     for (const c of reg.filter((x) => entityOf(x.templateId) === 'Holding')) {
       await exercise(registry, c.templateId, c.contractId, 'Archive', {})
     }
-    await create(registry, tid('Holding'), { admin: registry, owner: buyer,  instrument: 'cBTC',          amount: '4200000.0' })
+    await create(registry, tid('Holding'), { admin: registry, owner: buyer,  instrument: 'cBTC',          amount: '25.0' })
     await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
-    const stake = reg.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === buyer && c.createArgument.instrument === 'HALDEN-EQUITY')
-    if (stake) await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: seller })
+    // Restore the pre-close cap table: drop the pro-rata investor allocations, give the founder back the 120k stake.
+    for (const c of reg.filter((x) => entityOf(x.templateId) === 'ShareCertificate' && x.createArgument.instrument === 'HALDEN-EQUITY')) {
+      const h = labelFor(c.createArgument.holder)
+      if (h !== 'Founders' && h !== 'ESOP' && h !== SELLER) await exercise(registry, c.templateId, c.contractId, 'Archive', {})
+    }
+    if (!reg.some((c) => entityOf(c.templateId) === 'ShareCertificate' && labelFor(c.createArgument.holder) === SELLER && c.createArgument.instrument === 'HALDEN-EQUITY')) {
+      await create(registry, tid('ShareCertificate'), { registrar: registry, holder: seller, instrument: 'HALDEN-EQUITY', shares: '120000.0' })
+    }
     res.json({ reset: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -921,7 +947,7 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     const operator = await ensureParty('AtriumApp')
     const regAcs = await acsOf(registry)
     const hasHolding = (inst: string) => regAcs.some((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === inst)
-    if (!hasHolding('cBTC'))          { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'cBTC',          amount: '4200000.0' }); did.push('Leg:cBTC') }
+    if (!hasHolding('cBTC'))          { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'cBTC',          amount: '25.0' }); did.push('Leg:cBTC') }
     if (!hasHolding('HALDEN-EQUITY')) { await create(registry, tid('Holding'), { admin: registry, owner: seller,   instrument: 'HALDEN-EQUITY', amount: '120000.0'  }); did.push('Leg:equity') }
     if (!regAcs.some((c) => entityOf(c.templateId) === 'AllocationFactory')) { await create(registry, tid('AllocationFactory'), { admin: registry, users: [meridian, seller, operator] }); did.push('Factory') }
 
