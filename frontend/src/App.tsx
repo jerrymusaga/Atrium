@@ -15,6 +15,17 @@ function fmtRate(n: number) {
   return n >= 1 ? n.toFixed(2) : n.toPrecision(2)
 }
 
+// Suggest a download filename extension from the media type.
+function extFor(mime?: string) {
+  if (!mime) return ''
+  if (mime === 'application/pdf') return '.pdf'
+  if (mime === 'text/csv') return '.csv'
+  if (mime === 'text/plain') return '.txt'
+  if (mime === 'application/json') return '.json'
+  if (mime.startsWith('image/')) return '.' + mime.split('/')[1].replace('jpeg', 'jpg').replace('svg+xml', 'svg')
+  return ''
+}
+
 export default function App() {
   const [viewers, setViewers] = useState<Viewer[]>([])
   const [viewer, setViewer] = useState<string>('')
@@ -1041,7 +1052,7 @@ export default function App() {
                 </div>
               )}
               {doc.dataUrl && (
-                <a className="btn ghost doc-download" href={doc.dataUrl} download={doc.title}>⬇ Download decrypted file</a>
+                <a className="btn ghost doc-download" href={doc.dataUrl} download={doc.title + extFor(doc.mime)}>⬇ Download decrypted file</a>
               )}
               <div className="doc-modal-foot mono">
                 🔓 AES-256-GCM · {doc.bytes.toLocaleString()} bytes ciphertext · {doc.hash.slice(0, 23)}… — the key service

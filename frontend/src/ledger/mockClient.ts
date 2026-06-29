@@ -40,6 +40,57 @@ let deal: Deal = {
 }
 const tierName = (t: number) => deal.tiers?.[t - 1] ?? `Tier ${t}`
 
+// Build a small, valid single-page PDF (Helvetica) from ASCII lines and return it as a data URL,
+// so the seeded data room ships a REAL openable file with no binary asset to bundle.
+function makePdf(title: string, lines: string[]): string {
+  const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+  let content = `BT\n/F1 15 Tf\n56 748 Td\n(${esc(title)}) Tj\n/F1 10 Tf\n0 -26 Td\n`
+  for (const ln of lines) content += `(${esc(ln)}) Tj\n0 -15 Td\n`
+  content += 'ET'
+  const objs = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>',
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+    `<</Length ${content.length}>>\nstream\n${content}\nendstream`,
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets: number[] = []
+  objs.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n` })
+  const xrefStart = pdf.length
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`
+  offsets.forEach((off) => { pdf += `${String(off).padStart(10, '0')} 00000 n \n` })
+  pdf += `trailer\n<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF`
+  return 'data:application/pdf;base64,' + btoa(pdf)
+}
+
+const CAP_TABLE_CSV = `Holder,Shares,Ownership %,Class
+Founders,600000,60.0%,Common
+ESOP Pool,280000,28.0%,Options
+Series A (on offer),120000,12.0%,Preferred
+Total,1000000,100.0%,`
+
+const TERM_SHEET_PDF = makePdf('HALDEN ROBOTICS - SERIES A TERM SHEET (CONFIDENTIAL)', [
+  '',
+  'Issuer            Halden Robotics AS',
+  'Round             Series A (Primary)',
+  'Raise             25 cBTC',
+  'Instrument        HALDEN-EQUITY (Preferred)',
+  'Stake on offer    120,000 shares (~12% fully diluted)',
+  'Pre-money         ~183 cBTC',
+  'Liquidation pref  1.0x, non-participating',
+  'Board             1 investor seat',
+  'Pro-rata rights   Yes, for the lead investor',
+  '',
+  'Closing conditions',
+  '  - Raise target met (25 cBTC committed)',
+  '  - Board + Legal + Compliance approval on-ledger',
+  '  - Settlement: atomic cBTC <-> equity on Canton',
+  '',
+  'This term sheet is non-binding except for the confidentiality and',
+  'exclusivity provisions. Tier: Legal.',
+])
+
 type RawDoc = { docId: string; title: string; tier: number; contentHash: string; content: string; mime?: string; dataUrl?: string }
 const docs: RawDoc[] = [
   {
@@ -49,6 +100,14 @@ const docs: RawDoc[] = [
   {
     docId: 'financials', title: 'Audited financials', tier: 2, contentHash: 'sha256:6add8e4565209a06',
     content: `HALDEN ROBOTICS — AUDITED FINANCIALS (Tier 2 · CONFIDENTIAL)\n\nFY2025 (audited)\n  Revenue                 41,800,000\n  YoY growth                    +68%\n  Gross profit            24,300,000   (58.1% margin)\n  Adj. EBITDA              6,900,000   (16.5% margin)\n  Net cash                12,400,000\n  Contracted backlog      57,000,000\n\nSeries A terms\n  Raise target              25 cBTC\n  Stake on offer        120,000 shares (~12%)\n\nIf you can read this, the key service released your AES-256-GCM key —\nwhich it only does because the ledger confirms your grant covers Tier 2.`,
+  },
+  {
+    docId: 'cap-table', title: 'Cap table', tier: 2, contentHash: 'sha256:c0ffee5cap7ab1e0',
+    content: CAP_TABLE_CSV, mime: 'text/csv', dataUrl: 'data:text/csv;base64,' + btoa(CAP_TABLE_CSV),
+  },
+  {
+    docId: 'term-sheet', title: 'Series A term sheet', tier: 3, contentHash: 'sha256:7e3m5h33700b1a55',
+    content: '', mime: 'application/pdf', dataUrl: TERM_SHEET_PDF,
   },
 ]
 
