@@ -818,36 +818,44 @@ export default function App() {
               </>
             )}
 
-            {/* Competing investors table (merged: grants + commitments + bids) */}
-            {view?.investorsDetail && view.investorsDetail.length > 0 ? (
+            {/* The round book: each committed investor + their pro-rata equity allocation */}
+            {view?.investorsDetail && view.investorsDetail.length > 0 ? (() => {
+              const totalCommitted = view.investorsDetail.reduce((s, i) => s + (i.committed ?? 0), 0) || 1
+              return (
               <div className="inv-table-wrap">
-                <div className="eyebrow" style={{ marginBottom: 8 }}>Competing investors</div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>The round book — pro-rata allocation</div>
                 <table className="inv-table">
                   <thead>
                     <tr>
                       <th>Investor</th>
                       <th>Tier</th>
                       <th>cBTC committed</th>
-                      <th>Sealed bid</th>
+                      <th>Allocation (12% round)</th>
+                      <th>Bid</th>
                       <th>KYC</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {view.investorsDetail.map((inv) => (
+                    {view.investorsDetail.map((inv) => {
+                      const shares = inv.committed ? Math.round((inv.committed / totalCommitted) * 120000) : 0
+                      const pct = inv.committed ? (inv.committed / totalCommitted) * 12 : 0
+                      return (
                       <tr key={inv.name}>
                         <td className="inv-name">{inv.name}</td>
                         <td className="mono">T{inv.tier}</td>
                         <td className={`mono inv-cbtc${inv.committed === null ? ' none' : ''}`}>
                           {inv.committed !== null ? `${inv.committed} cBTC` : '—'}
                         </td>
+                        <td className="mono">{shares ? `${shares.toLocaleString()} sh · ${pct.toFixed(2)}%` : <span className="muted-note">—</span>}</td>
                         <td>{inv.hasBid ? <span className="o-flag mono">SEALED</span> : <span className="muted-note">—</span>}</td>
                         <td>{inv.kyc ? <span className="kyc-badge ok">✓ KYB</span> : <span className="kyc-badge pending">Pending</span>}</td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
-            ) : (view?.offers && view.offers.length > 0 && (
+              )
+            })() : (view?.offers && view.offers.length > 0 && (
               <ul className="offers" style={{ marginTop: 16 }}>
                 {view.offers.map((o) => (
                   <li key={o.offerId} className="offer status-open">
@@ -951,7 +959,7 @@ export default function App() {
             </div>
             <ul className="captable">
               {view.capTable.map((r, i) => (
-                <li key={i} className={view.settled && (r.holderLabel === 'Meridian' || r.holderLabel === 'Boranic') ? 'is-new' : ''}>
+                <li key={i} className={view.settled && r.holderLabel !== 'Founders' && r.holderLabel !== 'ESOP' && r.holderLabel !== 'Halden' ? 'is-new' : ''}>
                   <span className="ct-holder">{r.holderLabel}</span>
                   <span className="ct-bar"><span className="ct-fill" style={{ width: `${r.pct}%` }} /></span>
                   <span className="ct-pct mono">{r.pct}%</span>
@@ -961,10 +969,10 @@ export default function App() {
             </ul>
             <p className="panel-note">
               {view.settled
-                ? 'Ownership transferred on settlement — the share registry now reflects the new holder.'
+                ? 'Settled — the 12% round was allocated pro-rata to each committed investor; the registry now reflects every new holder.'
                 : current.role === 'seller'
-                  ? 'The 12% stake on offer transfers to the winning investor the instant the deal closes.'
-                  : 'Your tokenized ownership appears here once the founder closes the deal.'}
+                  ? 'At close, the 12% round is allocated pro-rata to each committed investor — proportional to their cBTC.'
+                  : 'Your tokenized ownership appears here once the round closes, pro-rata to your commitment.'}
             </p>
           </section>
         )}

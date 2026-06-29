@@ -144,7 +144,6 @@ let offers: Offer[] = [
 ]
 
 let settled = false
-let acceptedOffer: Offer | null = null
 // simulated off-chain tampering set (mock only) — docIds whose blob has been "corrupted"
 const tampered = new Set<string>()
 // post-close capital distribution (mock) — null until the founder declares one
@@ -171,37 +170,42 @@ function conditionList(): ConditionItem[] {
 }
 const isAllGreen = () => conditionList().every((c) => c.done)
 
-// The winning investor (accepted bid, else the highest sealed bid) — receives the stake at close.
-function winningBuyer(): PartyId {
-  if (acceptedOffer) return acceptedOffer.buyer
-  return [...offers].sort((a, b) => b.pricePerUnit - a.pricePerUnit)[0]?.buyer ?? BUYER_B
+// Pro-rata allocation: at close, the 120,000-share (12%) round is split across every committed
+// investor in proportion to their cBTC commitment. No single "winner" — it's a primary round.
+function allocations(): { party: PartyId; label: string; cbtc: number; shares: number }[] {
+  const total = committedTotal() || 1
+  return Object.entries(commitments)
+    .map(([p, c]) => ({ party: p, label: labelOf(p), cbtc: c.amount, shares: Math.round((c.amount / total) * EQUITY) }))
+    .sort((a, b) => b.shares - a.shares)
 }
 
 function holdings(): Holding[] {
-  const wb = winningBuyer()
   const raised = committedTotal()
+  // The two atomic legs: the pooled committed cBTC vs the 120k-share round. They swap together.
   if (!settled) {
     return [
-      { owner: wb, ownerLabel: labelOf(wb), instrument: 'cBTC', amount: raised },
+      { owner: '_investors', ownerLabel: 'Investors (committed)', instrument: 'cBTC', amount: raised },
       { owner: SELLER, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: EQUITY },
     ]
   }
-  // post-close: founder holds the raised cBTC treasury; the winning investor holds the equity
   return [
     { owner: SELLER, ownerLabel: 'Halden', instrument: 'cBTC', amount: raised },
-    { owner: wb, ownerLabel: labelOf(wb), instrument: 'HALDEN-EQUITY', amount: EQUITY },
+    { owner: '_investors', ownerLabel: 'Round investors', instrument: 'HALDEN-EQUITY', amount: EQUITY },
   ]
 }
 
-// Halden Robotics cap table: 1,000,000 shares. The 120,000-share (12%) stake on offer is held
-// by the founder until the close, then by the winning investor. Founder/regulator see all.
+// Halden Robotics cap table: 1,000,000 shares. Pre-close the founder holds the 120k round stake;
+// at close it's allocated pro-rata to each committed investor. Founder/regulator see all.
 function capTableFor(viewer: PartyId, privileged: boolean): CapTableRow[] {
-  const stakeHolder = settled ? labelOf(winningBuyer()) : 'Halden'
   const rows: CapTableRow[] = [
     { holderLabel: 'Founders', shares: 600000, pct: 60 },
     { holderLabel: 'ESOP', shares: 280000, pct: 28 },
-    { holderLabel: stakeHolder, shares: 120000, pct: 12 },
   ]
+  if (settled) {
+    for (const a of allocations()) rows.push({ holderLabel: a.label, shares: a.shares, pct: Math.round((a.shares / 1000000) * 1000) / 10 })
+  } else {
+    rows.push({ holderLabel: 'Halden', shares: EQUITY, pct: 12 })
+  }
   if (privileged) return rows
   return rows.filter((r) => r.holderLabel === labelOf(viewer))
 }
@@ -453,16 +457,14 @@ export const mockClient: LedgerClient = {
     await wait(120)
     if (viewer !== SELLER) throw new Error('Only the founder can accept a bid')
     offers = offers.map((o) => (o.offerId === offerId ? { ...o, status: 'accepted' } : o))
-    acceptedOffer = offers.find((o) => o.offerId === offerId) ?? null
   },
 
-  // The conditional close: enforces all 4 on-ledger conditions (mirrors Deal.Close), then swaps
-  // cBTC ↔ equity atomically. Picks the highest sealed bid as the winner if none was accepted.
+  // The conditional close: enforces all 4 on-ledger conditions (mirrors Deal.Close), then settles
+  // the round atomically — pooled cBTC → founder, equity allocated pro-rata to every committed investor.
   async settle(viewer: PartyId) {
     if (viewer !== SELLER) throw new Error('Only the founder drives the close')
     if (!isAllGreen()) throw new Error('Close blocked — all 4 conditions (raise target + Board + Legal + Compliance) must be green.')
     await wait(900) // the atomic swap
-    if (!acceptedOffer) acceptedOffer = offers.find((o) => o.buyer === winningBuyer()) ?? null
     settled = true
   },
 
@@ -513,7 +515,7 @@ export const mockClient: LedgerClient = {
     const raised = settled ? committed : 0
     return {
       settled,
-      winningBuyerLabel: labelOf(winningBuyer()),
+      winningBuyerLabel: null,
       bidPricePerUnit: 0,
       bidQuantity: EQUITY,
       expectedCash: committed,
