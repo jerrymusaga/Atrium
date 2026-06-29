@@ -37,11 +37,13 @@ template Commitment
 -- the founder observes it so the Deal.Close gate can fetch and verify all required roles.
 template Approval
   with
-    approver   : Party
-    role       : Text
-    dealId     : Text
-    approvedAt : Time
-    founder    : Party
+    approver     : Party
+    role         : Text
+    dealId       : Text
+    approvedAt   : Time
+    founder      : Party
+    envelopeId   : Text   -- the e-signature envelope reference (modeled DocuSign)
+    documentHash : Text   -- hash of the signed resolution PDF anchored in the data room
   where
     signatory approver
     observer founder
@@ -280,9 +282,9 @@ testConditionalClose = script do
   commitCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, amount = 25.0, committedAt = now)
   offerCid  <- submit investor do createCmd (Offer with buyer = investor, seller, dealId, pricePerUnit = 25.0, quantity = 1000000.0, submittedAt = now)
   kycCid    <- submit kycp do createCmd (KYCAttestation with kycProvider = kycp, subject = investor, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
-  boardApp  <- submit board do createCmd (Approval with approver = board, role = "BOARD",      dealId, approvedAt = now, founder = seller)
-  legalApp  <- submit legal do createCmd (Approval with approver = legal, role = "LEGAL",      dealId, approvedAt = now, founder = seller)
-  kycApp    <- submit kycp  do createCmd (Approval with approver = kycp,  role = "COMPLIANCE", dealId, approvedAt = now, founder = seller)
+  boardApp  <- submit board do createCmd (Approval with approver = board, role = "BOARD",      dealId, approvedAt = now, founder = seller, envelopeId = "ATR-BOARD-TEST",      documentHash = "sha256:board")
+  legalApp  <- submit legal do createCmd (Approval with approver = legal, role = "LEGAL",      dealId, approvedAt = now, founder = seller, envelopeId = "ATR-LEGAL-TEST",      documentHash = "sha256:legal")
+  kycApp    <- submit kycp  do createCmd (Approval with approver = kycp,  role = "COMPLIANCE", dealId, approvedAt = now, founder = seller, envelopeId = "ATR-COMPLIANCE-TEST", documentHash = "sha256:compliance")
 
   -- MUST FAIL: only Board approved — LEGAL and COMPLIANCE still missing
   submitMustFail seller do exerciseCmd dealCid (Close with winnerOffer = offerCid, kycCid, approvalCids = [boardApp], commitmentCids = [commitCid])

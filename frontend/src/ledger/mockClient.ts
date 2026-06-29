@@ -128,8 +128,8 @@ let commitments: Record<PartyId, { amount: number; committedAt: string }> = {
   [BUYER_B]: { amount: 12, committedAt: '10:40' },
 }
 
-// governance role -> approval. Seeded empty so judges click Board / Legal / Compliance through.
-let approvals: Record<string, { role: string; approvedAt: string }> = {}
+// governance role -> approval (with the e-signature attestation). Seeded empty so judges click through.
+let approvals: Record<string, { role: string; approvedAt: string; envelopeId: string; documentHash: string }> = {}
 
 let accessTrail: AccessEvent[] = [
   { buyer: BUYER_A, buyerLabel: 'Boranic', docId: 'teaser', docTitle: 'Investment teaser', accessedAt: '09:14' },
@@ -269,7 +269,8 @@ export const mockClient: LedgerClient = {
     const signer = (sig?.signedBy ?? viewer).trim() || viewer
     const envelopeId = sig?.envelopeId ?? `ATR-${r}-${Date.now().toString(36).toUpperCase()}`
     const when = new Date().toTimeString().slice(0, 5)
-    approvals = { ...approvals, [r]: { role: r, approvedAt: when } }
+    const documentHash = 'sha256:' + Math.random().toString(16).slice(2, 18)
+    approvals = { ...approvals, [r]: { role: r, approvedAt: when, envelopeId, documentHash } }
     const docId = `resolution-${r.toLowerCase()}`
     if (!docs.some((d) => d.docId === docId)) {
       const pdf = makePdf(`HALDEN ROBOTICS - ${r} RESOLUTION`, [
@@ -282,7 +283,7 @@ export const mockClient: LedgerClient = {
         'signed resolution is encrypted in the data room and its hash is',
         'anchored on-ledger for tamper-evidence.',
       ])
-      docs.push({ docId, title: `${r} resolution — ${signer}`, tier: 3, contentHash: 'sha256:' + Math.random().toString(16).slice(2, 18), content: '', mime: 'application/pdf', dataUrl: pdf })
+      docs.push({ docId, title: `${r} resolution — ${signer}`, tier: 3, contentHash: documentHash, content: '', mime: 'application/pdf', dataUrl: pdf })
     }
   },
 
@@ -373,23 +374,25 @@ export const mockClient: LedgerClient = {
     const myApproval = myApprovalRole && approvals[myApprovalRole] ? { role: myApprovalRole, approvedAt: approvals[myApprovalRole].approvedAt } : null
 
     // Unified on-chain audit trail (founder / oversight lens): the whole lifecycle in order.
-    const lifecycle = privileged
-      ? [
-          ...investorParties().map((p, i) => ({ at: `09:0${i + 1}`, kind: 'grant' as const, actor: labelOf(p), detail: `granted access up to “${tierName(grants[p] ?? 1)}”` })),
-          ...accessTrail.map((e) => ({ at: e.accessedAt, kind: 'disclosure' as const, actor: e.buyerLabel, detail: `opened “${e.docTitle}”` })),
-          ...Object.entries(commitments).map(([p, c]) => ({ at: c.committedAt, kind: 'commitment' as const, actor: labelOf(p), detail: `committed ${c.amount} cBTC toward the raise` })),
-          ...Object.values(approvals).map((a) => {
-            const resDoc = docs.find((d) => d.docId === `resolution-${a.role.toLowerCase()}`)
-            const signer = resDoc ? resDoc.title.split('—').pop()?.trim() : ''
-            const hash = resDoc?.contentHash ?? ''
-            return {
-              at: a.approvedAt, kind: 'approval' as const, actor: a.role,
-              detail: signer ? `signed the ${a.role} resolution — ${signer}${hash ? ` · ${hash.slice(0, 23)}…` : ''}` : `${a.role} approval recorded on-ledger`,
-            }
-          }),
-          ...(settled ? [{ at: '', kind: 'settlement' as const, actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' }] : []),
-        ].sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : 1))
-      : undefined
+    let lifecycle: { at: string; kind: 'grant' | 'disclosure' | 'commitment' | 'approval' | 'settlement' | 'distribution'; actor: string; detail: string }[] | undefined
+    if (privileged) {
+      lifecycle = [
+        ...investorParties().map((p, i) => ({ at: `09:0${i + 1}`, kind: 'grant' as const, actor: labelOf(p), detail: `granted access up to “${tierName(grants[p] ?? 1)}”` })),
+        ...accessTrail.map((e) => ({ at: e.accessedAt, kind: 'disclosure' as const, actor: e.buyerLabel, detail: `opened “${e.docTitle}”` })),
+        ...Object.entries(commitments).map(([p, c]) => ({ at: c.committedAt, kind: 'commitment' as const, actor: labelOf(p), detail: `committed ${c.amount} cBTC toward the raise` })),
+        ...Object.values(approvals).map((a) => {
+          const resDoc = docs.find((d) => d.docId === `resolution-${a.role.toLowerCase()}`)
+          const signer = resDoc ? resDoc.title.split('—').pop()?.trim() : ''
+          return {
+            at: a.approvedAt, kind: 'approval' as const, actor: a.role,
+            detail: signer ? `signed the ${a.role} resolution — ${signer}${a.envelopeId ? ` · ${a.envelopeId}` : ''}${a.documentHash ? ` · ${a.documentHash.slice(0, 19)}…` : ''}` : `${a.role} approval recorded on-ledger`,
+          }
+        }),
+      ].sort((a, b) => a.at.localeCompare(b.at))
+      // Settlement, then any post-close distribution, cap the timeline in lifecycle order.
+      if (settled) lifecycle.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' })
+      if (distribution) lifecycle.push({ at: '', kind: 'distribution', actor: 'Registry', detail: `declared ${distribution.total.toLocaleString()} cBTC distribution to ${distribution.recipients.length} holders — pro-rata, one atomic transaction` })
+    }
 
     // Capital distribution: founder/regulator see the whole declaration; a holder sees only theirs.
     const mineDist = distribution?.recipients.find((r) => r.holderLabel === labelOf(viewer))

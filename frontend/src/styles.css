@@ -335,6 +335,9 @@ body {
 .audit-settlement .audit-dot { background: var(--settled); border-color: var(--settled); box-shadow: 0 0 0 3px var(--ink), 0 0 14px rgba(79,168,139,.6); }
 .audit-settlement .audit-kind { color: var(--ink); background: var(--settled); border-color: var(--settled); font-weight: 600; }
 .audit-settlement .audit-body { color: var(--settled); font-weight: 500; }
+.audit-distribution .audit-dot { background: var(--seal); border-color: var(--seal); box-shadow: 0 0 0 3px var(--ink), 0 0 12px rgba(198,138,62,.5); }
+.audit-distribution .audit-kind { color: var(--ink); background: var(--seal); border-color: var(--seal); font-weight: 600; }
+.audit-distribution .audit-body { color: var(--seal); font-weight: 500; }
 
 /* ---- Provable integrity ---- */
 .chip.breach { color: #e06a5a; }

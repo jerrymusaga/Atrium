@@ -258,19 +258,24 @@ app.get('/deals/:dealId/view', async (req, res) => {
       }
       for (const c of approvals) {
         const a = c.createArgument
-        // Tie the approval to its signed resolution: show the signer + the on-ledger hash anchor.
+        // The approval now carries its e-signature attestation on-ledger: envelope + resolution hash.
         const resDoc = docManifest.find((d: any) => d.docId === `resolution-${String(a.role).toLowerCase()}`)
         const signer = resDoc ? String(resDoc.title).split('—').pop()?.trim() : ''
-        const hash = resDoc ? String(resDoc.contentHash) : ''
+        const hash = String(a.documentHash ?? '')
+        const env = String(a.envelopeId ?? '')
         const detail = signer
-          ? `signed the ${a.role} resolution — ${signer}${hash ? ` · ${hash.slice(0, 23)}…` : ''}`
+          ? `signed the ${a.role} resolution — ${signer}${env ? ` · ${env}` : ''}${hash ? ` · ${hash.slice(0, 19)}…` : ''}`
           : `${a.role} approval recorded on-ledger`
         ev.push({ at: String(a.approvedAt), kind: 'approval', actor: a.role, detail })
       }
       ev.sort((x, y) => Date.parse(x.at) - Date.parse(y.at))
-      // Settlement caps the timeline (Holding carries no timestamp; it is always the last event).
+      // Settlement, then any post-close distribution, cap the timeline (in lifecycle order).
       if (settled) ev.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' })
-      lifecycle = ev.map((e) => ({ ...e, at: e.at ? e.at.slice(11, 16) : '' }))
+      if (distContracts.length > 0) {
+        const distTotal = distContracts.reduce((s, d: any) => s + num(d.amount), 0)
+        ev.push({ at: '', kind: 'distribution', actor: 'Registry', detail: `declared ${distTotal} cBTC distribution to ${distContracts.length} holders — pro-rata, one atomic transaction` })
+      }
+      lifecycle = ev.map((e) => ({ ...e, at: e.at && e.kind !== 'settlement' && e.kind !== 'distribution' ? e.at.slice(11, 16) : '' }))
     }
 
     // Commitment for a buyer lens
@@ -279,7 +284,12 @@ app.get('/deals/:dealId/view', async (req, res) => {
 
     // Approval for a governance role lens
     const myApprovalC = byEntity('Approval')[0]
-    const myApproval = myApprovalC ? { role: myApprovalC.createArgument.role, approvedAt: String(myApprovalC.createArgument.approvedAt).slice(11, 16) } : null
+    const myApproval = myApprovalC ? {
+      role: myApprovalC.createArgument.role,
+      approvedAt: String(myApprovalC.createArgument.approvedAt).slice(11, 16),
+      envelopeId: String(myApprovalC.createArgument.envelopeId ?? ''),
+      documentHash: String(myApprovalC.createArgument.documentHash ?? ''),
+    } : null
 
     res.json({
       deal: dealC ? { dealId: dealC.dealId, title: dealC.title, seller: dealC.seller, instrument: dealC.instrument, quantity: num(dealC.quantity), raiseTarget: num(dealC.raiseTarget ?? 0), tiers: dealTiers } : null,
@@ -528,8 +538,9 @@ app.post('/deals/:dealId/approve', async (req, res) => {
       await create(seller, tid('Document'), { seller, dealId: DEAL_ID, docId: resDocId, title: `${ROLE} resolution — ${signer}`, tier: '3', contentHash: hash, blobPointer: pointer })
     }
 
-    // The on-ledger Approval is the FACT the close gate verifies (unchanged template).
-    await create(approver, tid('Approval'), { approver, role: ROLE, dealId: DEAL_ID, approvedAt: now, founder })
+    // The on-ledger Approval is the FACT the close gate verifies; it now also carries the
+    // e-signature envelope id + the signed resolution's hash as its attestation.
+    await create(approver, tid('Approval'), { approver, role: ROLE, dealId: DEAL_ID, approvedAt: now, founder, envelopeId, documentHash: hash })
     res.json({ approved: true, role: ROLE, envelopeId, resolutionDocId: resDocId, hash })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })

@@ -76,7 +76,7 @@ export type Holding = {
 export type CapTableRow = { holderLabel: string; shares: number; pct: number }
 
 // One on-ledger event in the unified audit trail (founder / oversight lens).
-export type LifecycleKind = 'grant' | 'disclosure' | 'commitment' | 'approval' | 'settlement'
+export type LifecycleKind = 'grant' | 'disclosure' | 'commitment' | 'approval' | 'settlement' | 'distribution'
 export type LifecycleEvent = {
   at: string          // HH:MM ledger timestamp ('' for the synthetic settlement cap)
   kind: LifecycleKind
@@ -143,7 +143,7 @@ export type DealView = {
   kyc?: KYC | null
   conditions?: DealConditions
   myCommitment?: { amount: number; committedAt: string } | null
-  myApproval?: { role: string; approvedAt: string } | null
+  myApproval?: { role: string; approvedAt: string; envelopeId?: string; documentHash?: string } | null
   investorsDetail?: InvestorSummary[]   // founder lens: per-investor competing bids table
   lifecycle?: LifecycleEvent[]          // founder / oversight lens: unified on-chain audit trail
   distribution?: DistributionSummary | null   // founder / regulator: declared capital distribution

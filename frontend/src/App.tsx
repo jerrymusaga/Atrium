@@ -450,16 +450,11 @@ export default function App() {
                   Your <strong>{view.myApproval.role}</strong> resolution was signed and recorded on-ledger at {view.myApproval.approvedAt}.
                   A signed PDF resolution is anchored on Canton — tamper-evident and included in the audit trail + integrity check.
                 </p>
-                {(() => {
-                  const resDoc = view.documents.find((d) => d.docId === `resolution-${approverRole.toLowerCase()}`)
-                  return resDoc ? (
-                    <div className="sig-receipt">
-                      <span className="sig-check mono">✓ SIGNED</span>
-                      <span className="sig-title">{resDoc.title}</span>
-                      <span className="sig-hash mono">{resDoc.contentHash}</span>
-                    </div>
-                  ) : null
-                })()}
+                <div className="sig-receipt">
+                  <span className="sig-check mono">✓ SIGNED</span>
+                  {view.myApproval.envelopeId && <span className="sig-title mono">{view.myApproval.envelopeId}</span>}
+                  <span className="sig-hash mono">{view.myApproval.documentHash || view.documents.find((d) => d.docId === `resolution-${approverRole.toLowerCase()}`)?.contentHash}</span>
+                </div>
               </>
             ) : (
               <>
@@ -1166,6 +1161,7 @@ function auditKindLabel(kind: LifecycleKind) {
     case 'commitment': return 'COMMIT'
     case 'approval':   return 'APPROVE'
     case 'settlement': return 'SETTLE'
+    case 'distribution': return 'DISTRIBUTE'
   }
 }
 
