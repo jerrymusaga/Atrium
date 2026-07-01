@@ -87,6 +87,29 @@ async function api<T>(conn: Conn, path: string, body?: unknown, method = 'POST')
   throw new Error(`Ledger API ${path} failed after retries: ${(lastErr as Error)?.message ?? lastErr}`)
 }
 
+// --- package (DAR) management — Phase B: install the token-standard + real cBTC/cETH/USDCx DARs ---
+// NOTE: verify the exact endpoint for YOUR build. JSON Ledger API v2 `POST /v2/packages` takes raw
+// DAR bytes; some deployments expose DAR upload via the participant admin PackageManagement API.
+export async function listPackages(conn: Conn = defaultConn): Promise<string[]> {
+  const tok = await bearer(conn)
+  const res = await fetch(`${conn.baseUrl}/v2/packages`, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`list packages → ${res.status}: ${text.slice(0, 400)}`)
+  const j: any = text ? JSON.parse(text) : {}
+  return Array.isArray(j) ? j : (j.packageIds ?? j.package_ids ?? [])
+}
+
+export async function uploadDar(darBytes: Uint8Array, conn: Conn = defaultConn): Promise<void> {
+  const tok = await bearer(conn)
+  const res = await fetch(`${conn.baseUrl}/v2/packages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
+    body: darBytes as unknown as BodyInit,
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`upload DAR → ${res.status}: ${text.slice(0, 400)}`)
+}
+
 export type CreatedEvent = {
   contractId: string
   templateId: string // pkgId:Module:Entity

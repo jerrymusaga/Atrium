@@ -6,7 +6,8 @@
   "description": "Atrium executor app — holds the operator party, talks to the Canton JSON Ledger API, orchestrates the AllocationV1 close.",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "node --loader tsx src/server.ts"
+    "start": "node --loader tsx src/server.ts",
+    "dars": "tsx scripts/dars.ts"
   },
   "dependencies": {
     "express": "^4.19.2"
