@@ -57,6 +57,9 @@ export const httpClient: LedgerClient = {
   async loadDemo() {
     await post(`/deals/${DEAL}/seed`, {})
   },
+  async startNewDeal(viewer: PartyId) {
+    await post(`/deals/${DEAL}/new`, { party: viewer })
+  },
   async openDocument(viewer: PartyId, docId: string): Promise<DocContent> {
     const r = await j<DocContent & { dataBase64?: string }>(`/deals/${DEAL}/documents/${docId}/content?party=${encodeURIComponent(viewer)}`)
     const dataUrl = r.dataBase64 && r.mime ? `data:${r.mime};base64,${r.dataBase64}` : r.dataUrl

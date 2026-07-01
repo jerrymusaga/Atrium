@@ -92,7 +92,8 @@ const TERM_SHEET_PDF = makePdf('HALDEN ROBOTICS - SERIES A TERM SHEET (CONFIDENT
 ])
 
 type RawDoc = { docId: string; title: string; tier: number; contentHash: string; content: string; mime?: string; dataUrl?: string }
-const docs: RawDoc[] = [
+function demoDocs(): RawDoc[] {
+  return [
   {
     docId: 'teaser', title: 'Investment teaser', tier: 1, contentHash: 'sha256:b52e8f7e1d344718',
     content: `HALDEN ROBOTICS — INVESTMENT TEASER (Tier 1)\n\nProject Halden — 25 cBTC Series A in Halden Robotics, a warehouse-automation company.\nFounded 2019 · Oslo & Austin · 140 FTE. Category: autonomous mobile robots for 3PL.\n\n• 3-year revenue CAGR ~70%; gross margin expanding with the Gen-3 fleet.\n• Blue-chip logistics customers; multi-year contracted backlog.\n• Stake on offer: 120,000 shares (~12% fully diluted).\n\nAudited financials and the cap table are in Tier 2, for verified deep-diligence investors.`,
@@ -109,13 +110,18 @@ const docs: RawDoc[] = [
     docId: 'term-sheet', title: 'Series A term sheet', tier: 3, contentHash: 'sha256:7e3m5h33700b1a55',
     content: '', mime: 'application/pdf', dataUrl: TERM_SHEET_PDF,
   },
-]
+  ]
+}
+let docs: RawDoc[] = demoDocs()
+
+// whether a deal is configured (false → founder sees the "set up the deal room" flow)
+let hasDeal = true
 
 // buyer -> max tier they may access
-const grants: Record<PartyId, number> = { [BUYER_A]: 1, [BUYER_B]: 2, [BUYER_C]: 1 }
+let grants: Record<PartyId, number> = { [BUYER_A]: 1, [BUYER_B]: 2, [BUYER_C]: 1 }
 
 // buyer -> KYC/KYB attestation (issued by an independent provider). The compliance gate.
-const kyc: Record<PartyId, { level: string; jurisdiction: string }> = {
+let kyc: Record<PartyId, { level: string; jurisdiction: string }> = {
   [BUYER_A]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' },
   [BUYER_B]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' },
   [BUYER_C]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' },
@@ -149,10 +155,59 @@ const tampered = new Set<string>()
 // post-close capital distribution (mock) — null until the founder declares one
 let distribution: DistributionSummary | null = null
 
-const EQUITY = 120000   // the on-offer stake, in shares
+const DEMO_STAKE = 120000
+const stakeShares = () => deal.quantity ?? DEMO_STAKE   // the on-offer stake, in shares (dynamic)
 
 const labelOf = (party: PartyId) => (party === SELLER ? 'Halden' : party)
 const investorParties = () => Object.keys(grants)
+
+// Restore the full seeded Halden demo (used at load + by "Load the fundraise demo").
+function seedDemo() {
+  deal = { dealId: 'HALDEN-2026-A', title: 'Halden Robotics — 25 cBTC Series A', seller: SELLER, instrument: 'HALDEN-EQUITY', quantity: 120000, raiseTarget: 25, tiers: ['Teaser', 'Financials', 'Legal'] }
+  hasDeal = true
+  VIEWERS = [
+    { party: SELLER, label: 'Halden (Founder)', role: 'seller' },
+    { party: BUYER_A, label: 'Boranic (Investor · tier 1)', role: 'buyer' },
+    { party: BUYER_B, label: 'Meridian (Investor · tier 1+2)', role: 'buyer' },
+    { party: BUYER_C, label: 'Prometheus (Investor · tier 1)', role: 'buyer' },
+    { party: 'Board', label: 'Board (Approver)', role: 'board' },
+    { party: 'Legal', label: 'Legal (Approver)', role: 'legal' },
+    { party: 'Compliance', label: 'Compliance (Approver)', role: 'compliance' },
+    { party: 'Regulator', label: 'Regulator (observer)', role: 'regulator' },
+  ]
+  grants = { [BUYER_A]: 1, [BUYER_B]: 2, [BUYER_C]: 1 }
+  kyc = { [BUYER_A]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' }, [BUYER_B]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' }, [BUYER_C]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' } }
+  commitments = { [BUYER_A]: { amount: 8, committedAt: '10:15' }, [BUYER_B]: { amount: 12, committedAt: '10:40' } }
+  approvals = {}
+  accessTrail = [
+    { buyer: BUYER_A, buyerLabel: 'Boranic', docId: 'teaser', docTitle: 'Investment teaser', accessedAt: '09:14' },
+    { buyer: BUYER_B, buyerLabel: 'Meridian', docId: 'teaser', docTitle: 'Investment teaser', accessedAt: '09:31' },
+    { buyer: BUYER_B, buyerLabel: 'Meridian', docId: 'financials', docTitle: 'Audited financials', accessedAt: '10:02' },
+  ]
+  offers = [
+    { offerId: 'o1', buyer: BUYER_B, buyerLabel: 'Meridian', pricePerUnit: 1, quantity: 120000, submittedAt: '11:20', status: 'open' },
+    { offerId: 'o2', buyer: BUYER_A, buyerLabel: 'Boranic', pricePerUnit: 1, quantity: 120000, submittedAt: '11:48', status: 'open' },
+  ]
+  docs = demoDocs()
+  settled = false
+  distribution = null
+  tampered.clear()
+}
+
+// Clear to an empty, buildable round (no investors/docs/commitments) — the founder sets it up.
+function clearRound() {
+  hasDeal = false
+  VIEWERS = [
+    { party: SELLER, label: 'Halden (Founder)', role: 'seller' },
+    { party: 'Board', label: 'Board (Approver)', role: 'board' },
+    { party: 'Legal', label: 'Legal (Approver)', role: 'legal' },
+    { party: 'Compliance', label: 'Compliance (Approver)', role: 'compliance' },
+    { party: 'Regulator', label: 'Regulator (observer)', role: 'regulator' },
+  ]
+  grants = {}; kyc = {}; commitments = {}; approvals = {}
+  accessTrail = []; offers = []; docs = []
+  settled = false; distribution = null; tampered.clear()
+}
 
 // The conditional-close gate, computed live from commitments + approvals (mirrors Deal.Close).
 function committedTotal() {
@@ -175,36 +230,40 @@ const isAllGreen = () => conditionList().every((c) => c.done)
 function allocations(): { party: PartyId; label: string; cbtc: number; shares: number }[] {
   const total = committedTotal() || 1
   return Object.entries(commitments)
-    .map(([p, c]) => ({ party: p, label: labelOf(p), cbtc: c.amount, shares: Math.round((c.amount / total) * EQUITY) }))
+    .map(([p, c]) => ({ party: p, label: labelOf(p), cbtc: c.amount, shares: Math.round((c.amount / total) * stakeShares()) }))
     .sort((a, b) => b.shares - a.shares)
 }
 
 function holdings(): Holding[] {
   const raised = committedTotal()
-  // The two atomic legs: the pooled committed cBTC vs the 120k-share round. They swap together.
+  // The two atomic legs: the pooled committed cBTC vs the round's equity stake. They swap together.
   if (!settled) {
     return [
       { owner: '_investors', ownerLabel: 'Investors (committed)', instrument: 'cBTC', amount: raised },
-      { owner: SELLER, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: EQUITY },
+      { owner: SELLER, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: stakeShares() },
     ]
   }
   return [
     { owner: SELLER, ownerLabel: 'Halden', instrument: 'cBTC', amount: raised },
-    { owner: '_investors', ownerLabel: 'Round investors', instrument: 'HALDEN-EQUITY', amount: EQUITY },
+    { owner: '_investors', ownerLabel: 'Round investors', instrument: 'HALDEN-EQUITY', amount: stakeShares() },
   ]
 }
 
-// Halden Robotics cap table: 1,000,000 shares. Pre-close the founder holds the 120k round stake;
-// at close it's allocated pro-rata to each committed investor. Founder/regulator see all.
+// Cap table: Founders 600k + ESOP 280k + the round stake (deal.quantity). Pre-close the founder
+// holds the stake; at close it's allocated pro-rata to each committed investor. All dynamic.
+const FOUNDERS_SHARES = 600000
+const ESOP_SHARES = 280000
 function capTableFor(viewer: PartyId, privileged: boolean): CapTableRow[] {
+  const totalShares = FOUNDERS_SHARES + ESOP_SHARES + stakeShares()
+  const pctOf = (s: number) => Math.round((s / totalShares) * 1000) / 10
   const rows: CapTableRow[] = [
-    { holderLabel: 'Founders', shares: 600000, pct: 60 },
-    { holderLabel: 'ESOP', shares: 280000, pct: 28 },
+    { holderLabel: 'Founders', shares: FOUNDERS_SHARES, pct: pctOf(FOUNDERS_SHARES) },
+    { holderLabel: 'ESOP', shares: ESOP_SHARES, pct: pctOf(ESOP_SHARES) },
   ]
   if (settled) {
-    for (const a of allocations()) rows.push({ holderLabel: a.label, shares: a.shares, pct: Math.round((a.shares / 1000000) * 1000) / 10 })
+    for (const a of allocations()) rows.push({ holderLabel: a.label, shares: a.shares, pct: pctOf(a.shares) })
   } else {
-    rows.push({ holderLabel: 'Halden', shares: EQUITY, pct: 12 })
+    rows.push({ holderLabel: 'Halden', shares: stakeShares(), pct: pctOf(stakeShares()) })
   }
   if (privileged) return rows
   return rows.filter((r) => r.holderLabel === labelOf(viewer))
@@ -262,6 +321,10 @@ export const mockClient: LedgerClient = {
     if (!(amount > 0)) throw new Error('Enter a cBTC amount')
     await wait(150)
     commitments = { ...commitments, [viewer]: { amount, committedAt: new Date().toTimeString().slice(0, 5) } }
+    // Committing also registers the investor's participation in the round book.
+    if (!offers.some((o) => o.buyer === viewer)) {
+      offers = [...offers, { offerId: `o${offers.length + 1}`, buyer: viewer, buyerLabel: labelOf(viewer), pricePerUnit: 1, quantity: stakeShares(), submittedAt: new Date().toTimeString().slice(0, 5), status: 'open' }]
+    }
   },
 
   // Governance role signs off: records the on-ledger Approval AND anchors a signed resolution PDF
@@ -291,20 +354,36 @@ export const mockClient: LedgerClient = {
     }
   },
 
-  // Founder sets up the room: rename tiers, set the raise target + title. Mutates the
-  // in-browser deal so named tiers flow through documents and the AI exactly like live.
+  // Founder sets up a fresh, buildable round from scratch: target + stake + named tiers. Starts
+  // empty (no investors/docs/commitments) — the founder then invites, they commit, governance
+  // signs, and the round closes pro-rata. Fully dynamic, no seed required.
   async createDeal(viewer: PartyId, setup: DealSetup) {
     if (viewer !== SELLER) throw new Error('Only the founder can set up a deal')
     if (!(setup.raiseTarget > 0)) throw new Error('Set a raise target in cBTC')
     const tiers = setup.tiers.map((t) => t.trim()).filter(Boolean)
     if (tiers.length === 0) throw new Error('Name at least one tier')
     await wait(150)
-    deal = { ...deal, title: setup.title.trim() || deal.title, instrument: setup.instrument.trim() || deal.instrument, raiseTarget: setup.raiseTarget, tiers }
+    clearRound()
+    hasDeal = true
+    deal = {
+      dealId: 'HALDEN-2026-A', seller: SELLER,
+      title: setup.title.trim() || 'Untitled raise',
+      instrument: setup.instrument.trim() || 'EQUITY',
+      quantity: setup.quantity > 0 ? setup.quantity : 120000,
+      raiseTarget: setup.raiseTarget,
+      tiers,
+    }
   },
-  // Mock is always seeded — "load demo" just restores the canonical demo config.
+  // "Load the fundraise demo" — restore the full canonical Halden round.
   async loadDemo() {
     await wait(150)
-    deal = { ...deal, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', raiseTarget: 25, tiers: ['Teaser', 'Financials', 'Legal'] }
+    seedDemo()
+  },
+  // Founder starts over: clear to the empty "set up the deal room" state.
+  async startNewDeal(viewer: PartyId) {
+    if (viewer !== SELLER) throw new Error('Only the founder can start a new deal')
+    await wait(120)
+    clearRound()
   },
 
   // Investor submits a sealed bid for the stake on offer. Visible to the founder only.
@@ -318,6 +397,10 @@ export const mockClient: LedgerClient = {
 
   async getDealView(viewer: PartyId): Promise<DealView> {
     await wait(120)
+    // No deal configured yet → the founder sees the "set up the deal room" flow.
+    if (!hasDeal) {
+      return { deal: null, documents: [], accessTrail: [], offers: [], holdings: [], capTable: [], settled: false, kyc: null, lifecycle: undefined, distribution: null, myDistribution: null }
+    }
     const isSeller = viewer === SELLER
     const isRegulator = viewer === 'Regulator'
     const role = roleOf(viewer)
@@ -485,9 +568,11 @@ export const mockClient: LedgerClient = {
     const target = deal.raiseTarget ?? 1
     const tc = committedTotal()
     const nApprovals = Object.keys(approvals).length
-    const docsPts = 15
-    const invPts = 15
-    const bidsPts = offers.length > 0 ? 20 : 0
+    const multiTier = new Set(docs.map((d) => d.tier)).size > 1
+    const docsPts = docs.length === 0 ? 0 : multiTier ? 15 : 10
+    const invPts = Math.min(15, investorParties().length * 5)
+    const committedCount = Object.keys(commitments).length
+    const bidsPts = committedCount === 0 ? 0 : Math.min(20, committedCount * 7)
     const fundPts = Math.round(Math.min(1, tc / target) * 30)
     const apprPts = Math.round((nApprovals / 3) * 20)
     const score = docsPts + invPts + bidsPts + fundPts + apprPts
@@ -498,9 +583,9 @@ export const mockClient: LedgerClient = {
       score,
       narration,
       signals: [
-        { key: 'DOCS',      label: 'Documents in data room', pts: docsPts, max: 15, detail: `${docs.length} docs, multi-tier` },
+        { key: 'DOCS',      label: 'Documents in data room', pts: docsPts, max: 15, detail: docs.length ? `${docs.length} docs${multiTier ? ', multi-tier' : ''}` : 'none yet' },
         { key: 'INVESTORS', label: 'Investors invited',      pts: invPts,  max: 15, detail: `${investorParties().length} investors granted access` },
-        { key: 'BIDS',      label: 'Sealed bids received',   pts: bidsPts, max: 20, detail: `${offers.length} sealed bids in` },
+        { key: 'BIDS',      label: 'Investor commitments',   pts: bidsPts, max: 20, detail: `${committedCount} committed` },
         { key: 'FUNDING',   label: `Raise target (${target} cBTC)`, pts: fundPts, max: 30, detail: `${tc} / ${target} cBTC (${Math.round((tc / target) * 100)}%)` },
         { key: 'APPROVALS', label: 'Governance approvals',   pts: apprPts, max: 20, detail: `${nApprovals} / 3 required` },
       ],
@@ -517,7 +602,7 @@ export const mockClient: LedgerClient = {
       settled,
       winningBuyerLabel: null,
       bidPricePerUnit: 0,
-      bidQuantity: EQUITY,
+      bidQuantity: stakeShares(),
       expectedCash: committed,
       settledCash: raised,
       matched: settled && raised === committed,

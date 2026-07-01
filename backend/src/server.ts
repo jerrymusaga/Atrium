@@ -605,8 +605,8 @@ app.get('/deals/:dealId/readiness', async (req, res) => {
 
     const signals = [
       { key: 'DOCS',      label: 'Documents in data room', max: 15, pts: docs.length === 0 ? 0 : multiTier ? 15 : 10, detail: docs.length === 0 ? 'No documents yet' : `${docs.length} doc${docs.length > 1 ? 's' : ''}${multiTier ? ', multi-tier' : ''}` },
-      { key: 'INVESTORS', label: 'Investors invited',      max: 15, pts: grants.length === 0 ? 0 : grants.length >= 2 ? 15 : 8, detail: `${grants.length} investor${grants.length !== 1 ? 's' : ''} granted access` },
-      { key: 'BIDS',      label: 'Sealed bids received',  max: 20, pts: offers.length === 0 ? 0 : offers.length >= 2 ? 20 : 12, detail: offers.length === 0 ? 'No bids yet' : `${offers.length} sealed bid${offers.length !== 1 ? 's' : ''} in` },
+      { key: 'INVESTORS', label: 'Investors invited',      max: 15, pts: Math.min(15, grants.length * 5), detail: `${grants.length} investor${grants.length !== 1 ? 's' : ''} granted access` },
+      { key: 'BIDS',      label: 'Investor commitments',  max: 20, pts: commitments.length === 0 ? 0 : Math.min(20, commitments.length * 7), detail: `${commitments.length} committed` },
       { key: 'FUNDING',   label: `Raise target (${raiseTarget} cBTC)`, max: 30, pts: Math.round(fundingRatio * 30), detail: raiseTarget > 0 ? `${totalCommitted} / ${raiseTarget} cBTC (${Math.round(fundingRatio * 100)}%)` : 'No raise target set' },
       { key: 'APPROVALS', label: 'Governance approvals',  max: 20, pts: requiredCount > 0 ? Math.round((approvalCount / requiredCount) * 20) : 0, detail: `${approvalCount} / ${requiredCount} required` },
     ]
@@ -629,7 +629,7 @@ app.get('/deals/:dealId/readiness', async (req, res) => {
       if (approvalCount === requiredCount && requiredCount > 0) parts.push('all approvals in')
       else if (approvalCount > 0) parts.push(`${approvalCount}/${requiredCount} approvals`)
       else parts.push('approvals pending')
-      if (offers.length === 0) parts.push('no bids yet')
+      if (commitments.length === 0) parts.push('no commitments yet')
       narration = `Deal is ${score}% ready — ${parts.join(', ')}.`
     }
 
@@ -870,6 +870,21 @@ app.post('/deals', async (req, res) => {
       requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'], tiers: finalTiers,
     })
     res.json({ created: true, dealId: DEAL_ID, title: dealTitle, instrument: inst, raiseTarget: target, tiers: finalTiers })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Founder starts over: archive the Deal + its Documents (both seller-signed) so the "set up the
+// deal room" flow reappears. Best-effort — grants/commitments/holdings are left for /seed to reset.
+app.post('/deals/:dealId/new', async (req, res) => {
+  try {
+    await ensurePkg()
+    const prefix = String(req.body?.party ?? '')
+    if (prefix !== SELLER) return res.status(403).json({ error: 'Only the founder can start a new deal' })
+    const seller = await partyId(SELLER)
+    for (const c of (await acsOf(seller)).filter((x) => entityOf(x.templateId) === 'Deal' || entityOf(x.templateId) === 'Document')) {
+      await exercise(seller, c.templateId, c.contractId, 'Archive', {})
+    }
+    res.json({ cleared: true })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 

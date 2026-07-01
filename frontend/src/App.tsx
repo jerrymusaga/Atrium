@@ -81,6 +81,7 @@ export default function App() {
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — 25 cBTC Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
   const [setupTarget, setSetupTarget] = useState('25')
+  const [setupQuantity, setSetupQuantity] = useState('120000')
   const [setupTiers, setSetupTiers] = useState<string[]>([...DEMO_TIERS])
   const [creatingDeal, setCreatingDeal] = useState(false)
   const [loadingDemo, setLoadingDemo] = useState(false)
@@ -212,13 +213,16 @@ export default function App() {
 
   async function createDeal() {
     const target = Number(setupTarget)
+    const quantity = Number(setupQuantity)
     const tiers = setupTiers.map((t) => t.trim()).filter(Boolean)
     if (!(target > 0) || tiers.length === 0) { setMsg('Set a raise target and at least one named tier.'); return }
+    if (!(quantity > 0)) { setMsg('Set the stake on offer (shares).'); return }
     setCreatingDeal(true); setMsg(null)
     try {
-      await client.createDeal(viewer, { title: setupTitle, instrument: setupInstrument, raiseTarget: target, tiers })
+      await client.createDeal(viewer, { title: setupTitle, instrument: setupInstrument, raiseTarget: target, quantity, tiers })
+      await refreshViewers()
       await load(true)
-      setMsg(`Deal room created — named tiers ${tiers.join(' · ')}. Now add documents per tier and invite investors.`)
+      setMsg(`Deal room created — ${target} cBTC for ${quantity.toLocaleString()} shares, tiers ${tiers.join(' · ')}. Now add documents and invite investors.`)
     } catch (e) { setMsg((e as Error).message) } finally { setCreatingDeal(false) }
   }
 
@@ -228,8 +232,19 @@ export default function App() {
       await client.loadDemo()
       await refreshViewers()
       await load(true)
-      setMsg('Fundraise demo loaded — investors, documents, bids, commitments and governance roles are live.')
+      setMsg('Fundraise demo loaded — investors, documents, commitments and governance roles are live.')
     } catch (e) { setMsg((e as Error).message) } finally { setLoadingDemo(false) }
+  }
+
+  async function startNewDeal() {
+    if (!confirm('Start a new deal? This clears the current round so you can set one up from scratch.')) return
+    setMsg(null)
+    try {
+      await client.startNewDeal(viewer)
+      await refreshViewers()
+      await load(true)
+      setMsg('Cleared — set up your deal room: name the tiers, set the raise target and stake, then invite investors.')
+    } catch (e) { setMsg((e as Error).message) }
   }
 
   if (!entered) return <Landing onEnter={() => setEntered(true)} live={LIVE} />
@@ -302,6 +317,9 @@ export default function App() {
               {view.deal.raiseTarget ? <div><dt>Raise target</dt><dd className="mono">{view.deal.raiseTarget} cBTC</dd></div> : null}
               <div><dt>Deal ref</dt><dd className="mono">{view.deal.dealId}</dd></div>
             </dl>
+            {isSeller && !view.settled && (
+              <button className="deal-new" onClick={startNewDeal}>⟲ Start a new deal</button>
+            )}
           </div>
         )}
 
@@ -380,6 +398,13 @@ export default function App() {
               <label className="setup-field">
                 <span className="setup-lbl">Raise target (cBTC)</span>
                 <input className="field" inputMode="decimal" value={setupTarget} onChange={(e) => setSetupTarget(e.target.value)} placeholder="25" />
+              </label>
+              <label className="setup-field">
+                <span className="setup-lbl">
+                  Stake on offer (shares)
+                  {Number(setupQuantity) > 0 && <span className="setup-hint mono"> · ~{((Number(setupQuantity) / (880000 + Number(setupQuantity))) * 100).toFixed(1)}% of the company</span>}
+                </span>
+                <input className="field" inputMode="numeric" value={setupQuantity} onChange={(e) => setSetupQuantity(e.target.value)} placeholder="120000" />
               </label>
             </div>
 

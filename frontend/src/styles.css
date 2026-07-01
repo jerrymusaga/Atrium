@@ -567,6 +567,9 @@ body {
 .setup-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
 .setup-field { display: flex; flex-direction: column; gap: 6px; }
 .setup-lbl { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--steel); }
+.setup-hint { text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 10.5px; }
+.deal-new { margin-top: 14px; width: 100%; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 9px; padding: 7px 10px; font-size: 12px; cursor: pointer; transition: color .15s, border-color .15s; }
+.deal-new:hover { color: var(--text); border-color: var(--steel-dim); }
 .setup-tiers { display: grid; gap: 8px; margin-bottom: 18px; }
 .setup-tier-row { display: flex; align-items: center; gap: 8px; }
 .setup-tier-row .field { flex: 1; }

@@ -15,6 +15,8 @@ export interface LedgerClient {
   // One-click "load the fundraise demo" — seeds the full deterministic deal (investors,
   // docs, bids, commitments, governance, settlement legs) for recording.
   loadDemo(): Promise<void>
+  // Founder starts over: clears the current deal so the "set up the deal room" flow appears.
+  startNewDeal(viewer: PartyId): Promise<void>
   // Seller adds a document at ANY tier: encrypted off-ledger, hash + tier recorded on-ledger.
   // Either typed `content` (text) OR an uploaded `file` (pdf/image/…) — encrypted the same way.
   addDocument(viewer: PartyId, draft: { title: string; tier: number; content?: string; file?: DocFile }): Promise<void>

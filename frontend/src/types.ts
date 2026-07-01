@@ -32,6 +32,7 @@ export type DealSetup = {
   title: string
   instrument: string
   raiseTarget: number
+  quantity: number      // stake on offer, in shares (the % of the company being raised)
   tiers: string[]
 }
 
