@@ -668,35 +668,76 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     const registry = await partyId('Registry')
     const operator = await ensureParty('AtriumApp')
     const seller = await partyId(SELLER)
-    const buyer = await partyId('Meridian')
+    const EQ = 'HALDEN-EQUITY'   // the equity token (deal.instrument is a cosmetic label)
+
+    const sellerAcs0 = await acsOf(seller)
+    const dealC0 = sellerAcs0.find((c) => entityOf(c.templateId) === 'Deal')
+    if (!dealC0 && !breakLeg) return res.status(409).json({ error: 'No deal — set one up first' })
+    const stakeQty = dealC0 ? num(dealC0.createArgument.quantity) : 120000
+
+    // The representative committer (largest commitment) drives the atomic swap on behalf of the round.
+    const commitmentsAcs = sellerAcs0.filter((c) => entityOf(c.templateId) === 'Commitment')
+    const totalCommitted = commitmentsAcs.reduce((s, c) => s + num(c.createArgument.amount), 0)
+    const rep = commitmentsAcs.slice().sort((a, b) => num(b.createArgument.amount) - num(a.createArgument.amount))[0]
+    const buyer = (!breakLeg && rep) ? rep.createArgument.investor : await partyId('Meridian')
+
+    // --- Self-heal the settlement scaffolding: no-op on the seeded demo; builds it for a deal a
+    //     founder set up from scratch (mints the cBTC leg from commitments + the equity leg/certs). ---
+    if (!breakLeg) {
+      const reg0 = await acsOf(registry)
+      const hasCert = (pred: (a: any) => boolean) => reg0.some((c) => entityOf(c.templateId) === 'ShareCertificate' && pred(c.createArgument))
+      const hasHold = (pred: (a: any) => boolean) => reg0.some((c) => entityOf(c.templateId) === 'Holding' && pred(c.createArgument))
+      if (!hasCert(() => true)) {
+        const founders = await ensureParty('Founders'); const esop = await ensureParty('ESOP')
+        await create(registry, tid('ShareCertificate'), { registrar: registry, holder: founders, instrument: EQ, shares: '600000.0' })
+        await create(registry, tid('ShareCertificate'), { registrar: registry, holder: esop, instrument: EQ, shares: '280000.0' })
+      }
+      if (!hasCert((a) => a.holder === seller && a.instrument === EQ)) {
+        await create(registry, tid('ShareCertificate'), { registrar: registry, holder: seller, instrument: EQ, shares: stakeQty.toFixed(1) })
+      }
+      if (!hasHold((a) => a.instrument === EQ && a.owner === seller)) {
+        await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: EQ, amount: stakeQty.toFixed(1) })
+      }
+      if (rep && !hasHold((a) => a.instrument === 'cBTC' && a.owner === buyer)) {
+        await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'cBTC', amount: totalCommitted.toFixed(4) })
+      }
+      if (!reg0.some((c) => entityOf(c.templateId) === 'AllocationFactory')) {
+        const investors = Array.from(new Set(commitmentsAcs.map((c) => c.createArgument.investor)))
+        await create(registry, tid('AllocationFactory'), { admin: registry, users: [seller, operator, ...investors] })
+      }
+      if (rep && !sellerAcs0.some((c) => entityOf(c.templateId) === 'Offer' && c.createArgument.buyer === buyer)) {
+        await create(buyer, tid('Offer'), { buyer, seller, dealId: DEAL_ID, pricePerUnit: '1.0', quantity: stakeQty.toFixed(1), submittedAt: new Date().toISOString() })
+      }
+    }
 
     // --- On-ledger conditional close gate (skipped in break-leg stress-test) ---
     if (!breakLeg) {
       const sellerAcs = await acsOf(seller)
       const dealC = sellerAcs.find((c) => entityOf(c.templateId) === 'Deal')
-      const winningOffer = sellerAcs.find((c) => entityOf(c.templateId) === 'Offer')
-      if (!dealC)       return res.status(409).json({ error: 'No deal found — seed first' })
-      if (!winningOffer) return res.status(409).json({ error: 'No open offer — investor must submit a bid first' })
+      const winningOffer = sellerAcs.find((c) => entityOf(c.templateId) === 'Offer' && c.createArgument.buyer === buyer)
+        ?? sellerAcs.find((c) => entityOf(c.templateId) === 'Offer')
+      if (!dealC)        return res.status(409).json({ error: 'No deal found — set one up first' })
+      if (!winningOffer) return res.status(409).json({ error: 'No committed investor to close with' })
       const att = sellerAcs.find((c) => entityOf(c.templateId) === 'KYCAttestation'
         && c.createArgument.subject === winningOffer.createArgument.buyer
         && Date.parse(c.createArgument.expiresAt) > Date.now())
-      if (!att) return res.status(403).json({ error: 'Winning investor is not KYC-cleared' })
+      if (!att) return res.status(403).json({ error: 'The investor is not KYC-cleared' })
       const approvalCids  = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval').map((c) => c.contractId)
       const commitmentCids = sellerAcs.filter((c) => entityOf(c.templateId) === 'Commitment').map((c) => c.contractId)
       // Validate all 4 conditions on-ledger — aborts if any are missing
       await exercise(seller, dealC.templateId, dealC.contractId, 'Close', {
         winnerOffer: winningOffer.contractId, kycCid: att.contractId, approvalCids, commitmentCids,
       })
-      // Mark the winning offer accepted (consuming choice, cleans up the offer contract)
+      // Mark the offer accepted (consuming choice, cleans up the offer contract)
       await exercise(seller, winningOffer.templateId, winningOffer.contractId, 'Accept', { kycCid: att.contractId })
     }
 
     // --- Atomic DvP swap ---
     const regAcs = await acsOf(registry)
-    const cashH  = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'cBTC'          && c.createArgument.owner === buyer)
-    const eqH    = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'HALDEN-EQUITY' && c.createArgument.owner === seller)
+    const cashH  = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'cBTC' && c.createArgument.owner === buyer)
+    const eqH    = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === EQ   && c.createArgument.owner === seller)
     const factory = regAcs.find((c) => entityOf(c.templateId) === 'AllocationFactory')
-    if (!cashH || !eqH || !factory) return res.status(409).json({ error: 'legs not ready (seed first) or already settled' })
+    if (!cashH || !eqH || !factory) return res.status(409).json({ error: 'settlement legs not ready' })
 
     const settleBefore = new Date(Date.now() + 24 * 3600_000).toISOString()
     const coord = await create(operator, tid('SettlementCoordinator'), { executor: operator, settlementRef: ref, settleBefore })
@@ -719,18 +760,18 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     // Allocate the round PRO-RATA: archive the founder's stake cert and issue a ShareCertificate
     // to each committed investor in proportion to their cBTC commitment (no single winner).
     const commitmentsForAlloc = (await acsOf(seller)).filter((c) => entityOf(c.templateId) === 'Commitment')
-    const totalCommitted = commitmentsForAlloc.reduce((s, c) => s + num(c.createArgument.amount), 0) || 1
-    const stake = regAcs.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === seller && c.createArgument.instrument === 'HALDEN-EQUITY')
+    const totalForAlloc = commitmentsForAlloc.reduce((s, c) => s + num(c.createArgument.amount), 0) || 1
+    const stake = regAcs.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === seller && c.createArgument.instrument === EQ)
     if (stake && commitmentsForAlloc.length > 0) {
       await exercise(registry, stake.templateId, stake.contractId, 'Archive', {})
       for (const c of commitmentsForAlloc) {
-        const shares = Math.round((num(c.createArgument.amount) / totalCommitted) * 120000)
-        await create(registry, tid('ShareCertificate'), { registrar: registry, holder: c.createArgument.investor, instrument: 'HALDEN-EQUITY', shares: shares.toFixed(1) })
+        const shares = Math.round((num(c.createArgument.amount) / totalForAlloc) * stakeQty)
+        await create(registry, tid('ShareCertificate'), { registrar: registry, holder: c.createArgument.investor, instrument: EQ, shares: shares.toFixed(1) })
       }
     } else if (stake) {
       await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: buyer })
     }
-    res.json({ settled: true, atomic: true, settlementRef: ref, cbtcToFounder: totalCommitted, equityToInvestor: 120000, proRata: commitmentsForAlloc.length })
+    res.json({ settled: true, atomic: true, settlementRef: ref, cbtcToFounder: totalForAlloc, equityToInvestor: stakeQty, proRata: commitmentsForAlloc.length })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -820,6 +861,14 @@ app.post('/deals/:dealId/invite', async (req, res) => {
       buyer = await ensureParty(name)
     }
     await create(seller, tid('AccessGrant'), { seller, buyer, dealId: DEAL_ID, maxTier: String(maxTier), grantedAt: new Date().toISOString() })
+    // Onboarding clears KYC — attest the investor so they can be included in the conditional close.
+    const already = (await acsOf(seller)).some((c) => entityOf(c.templateId) === 'KYCAttestation' && c.createArgument.subject === buyer && Date.parse(c.createArgument.expiresAt) > Date.now())
+    if (!already) {
+      const kycp = await ensureParty('KYCProvider')
+      const now = new Date().toISOString()
+      const oneYear = new Date(Date.now() + 365 * 24 * 3600_000).toISOString()
+      await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: buyer, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear })
+    }
     res.json({ invited: true, party: labelFor(buyer), tier: maxTier, external: Boolean(buyerParty) })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
