@@ -66,7 +66,6 @@ export default function App() {
   const [attestation, setAttestation] = useState<CloseAttestation | null>(null)
   const [inviteName, setInviteName] = useState('')
   const [inviteTier, setInviteTier] = useState(1)
-  const [bid, setBid] = useState('')
   const [commitAmt, setCommitAmt] = useState('')
   const [committing, setCommitting] = useState(false)
   const [approving, setApproving] = useState(false)
@@ -157,13 +156,6 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) } finally { setAddingDoc(false) }
   }
 
-  async function makeOffer() {
-    try {
-      await client.submitOffer(viewer, Number(bid))
-      setBid('')
-      await load(true)
-    } catch (e) { setMsg((e as Error).message) }
-  }
 
   async function commitCBTC() {
     const amt = Number(commitAmt)
@@ -253,10 +245,6 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) } finally { setOpening(null) }
   }
 
-  async function accept(offerId: string) {
-    await client.acceptOffer(viewer, offerId)
-    await load()
-  }
 
   async function settle() {
     setSettling(true); setMsg(null); setRollback(null)
@@ -429,7 +417,7 @@ export default function App() {
               </button>
             </div>
             <p className="panel-note setup-demo-note">
-              The demo seeds three investors, multi-tier documents, sealed bids, cBTC commitments
+              The demo seeds three investors, multi-tier documents, cBTC commitments
               and the Board / Legal / Compliance roles — everything needed to drive the close.
             </p>
           </section>
@@ -690,12 +678,12 @@ export default function App() {
           </section>
         )}
 
-        {/* ── Investor: commit cBTC + sealed bid ── */}
+        {/* ── Investor: commit cBTC into the round ── */}
         {current.role === 'buyer' && !view?.settled && (
           <section className="panel">
             <div className="panel-head">
               <h2>Your position</h2>
-              <span className="count mono">cBTC commitment + sealed bid</span>
+              <span className="count mono">cBTC commitment</span>
             </div>
             {view?.kyc && (
               <p className="panel-note kyc-line">
@@ -704,56 +692,34 @@ export default function App() {
             )}
 
             {view?.myCommitment ? (
-              <div className="commit-status">
-                <span className="commit-amt mono">{view.myCommitment.amount} cBTC</span>
-                <span className="commit-label">locked on-ledger since {view.myCommitment.committedAt}</span>
-              </div>
-            ) : (
-              <div className="bid-row">
-                <input
-                  className="field"
-                  inputMode="decimal"
-                  placeholder="cBTC to commit (e.g. 25)"
-                  value={commitAmt}
-                  onChange={(e) => setCommitAmt(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commitCBTC() }}
-                />
-                <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commitCBTC}>
-                  {committing ? 'Locking cBTC…' : 'Commit cBTC'}
-                </button>
-              </div>
-            )}
-
-            {/* Sealed bid */}
-            {view?.offers.length === 0 && !view?.myCommitment ? null : (
               <>
-                {view?.offers.length === 0 ? (
-                  <div className="bid-row" style={{ marginTop: 12 }}>
-                    <input
-                      className="field"
-                      inputMode="decimal"
-                      placeholder="Bid price / equity unit"
-                      value={bid}
-                      onChange={(e) => setBid(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && Number(bid) > 0) makeOffer() }}
-                    />
-                    <button className="btn" disabled={!(Number(bid) > 0)} onClick={makeOffer}>
-                      Submit sealed bid
-                    </button>
-                  </div>
-                ) : (
-                  <ul className="offers" style={{ marginTop: 12 }}>
-                    {view?.offers.map((o) => (
-                      <li key={o.offerId} className="offer status-open">
-                        <div>
-                          <div className="o-buyer">Your sealed bid</div>
-                          <div className="o-terms mono">{o.quantity.toLocaleString()} units · submitted {o.submittedAt}</div>
-                        </div>
-                        <span className="o-flag mono">SEALED</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <div className="commit-status">
+                  <span className="commit-amt mono">{view.myCommitment.amount} cBTC</span>
+                  <span className="commit-label">locked on-ledger since {view.myCommitment.committedAt}</span>
+                </div>
+                <p className="panel-note">
+                  Your equity is allocated <strong>pro-rata to your commitment</strong> — it appears in the cap table the instant the round closes.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="bid-row">
+                  <input
+                    className="field"
+                    inputMode="decimal"
+                    placeholder="cBTC to commit (e.g. 12)"
+                    value={commitAmt}
+                    onChange={(e) => setCommitAmt(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commitCBTC() }}
+                  />
+                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commitCBTC}>
+                    {committing ? 'Locking cBTC…' : 'Commit cBTC'}
+                  </button>
+                </div>
+                <p className="panel-note">
+                  A fixed-price round: {view?.deal?.raiseTarget ?? 25} cBTC for the {(view?.deal?.quantity ?? 120000).toLocaleString()}-share
+                  stake on offer. Your equity is allocated pro-rata to your commitment at close. Rival investors can’t see your commitment.
+                </p>
               </>
             )}
           </section>
@@ -821,6 +787,9 @@ export default function App() {
             {/* The round book: each committed investor + their pro-rata equity allocation */}
             {view?.investorsDetail && view.investorsDetail.length > 0 ? (() => {
               const totalCommitted = view.investorsDetail.reduce((s, i) => s + (i.committed ?? 0), 0) || 1
+              const stakeShares = view.deal?.quantity ?? 120000
+              const companyShares = (view.capTable ?? []).reduce((s, r) => s + r.shares, 0) || 1000000
+              const stakePct = (stakeShares / companyShares) * 100
               return (
               <div className="inv-table-wrap">
                 <div className="eyebrow" style={{ marginBottom: 8 }}>The round book — pro-rata allocation</div>
@@ -830,15 +799,14 @@ export default function App() {
                       <th>Investor</th>
                       <th>Tier</th>
                       <th>cBTC committed</th>
-                      <th>Allocation (12% round)</th>
-                      <th>Bid</th>
+                      <th>Allocation ({stakePct.toFixed(0)}% round)</th>
                       <th>KYC</th>
                     </tr>
                   </thead>
                   <tbody>
                     {view.investorsDetail.map((inv) => {
-                      const shares = inv.committed ? Math.round((inv.committed / totalCommitted) * 120000) : 0
-                      const pct = inv.committed ? (inv.committed / totalCommitted) * 12 : 0
+                      const shares = inv.committed ? Math.round((inv.committed / totalCommitted) * stakeShares) : 0
+                      const pct = inv.committed ? (inv.committed / totalCommitted) * stakePct : 0
                       return (
                       <tr key={inv.name}>
                         <td className="inv-name">{inv.name}</td>
@@ -847,7 +815,6 @@ export default function App() {
                           {inv.committed !== null ? `${inv.committed} cBTC` : '—'}
                         </td>
                         <td className="mono">{shares ? `${shares.toLocaleString()} sh · ${pct.toFixed(2)}%` : <span className="muted-note">—</span>}</td>
-                        <td>{inv.hasBid ? <span className="o-flag mono">SEALED</span> : <span className="muted-note">—</span>}</td>
                         <td>{inv.kyc ? <span className="kyc-badge ok">✓ KYB</span> : <span className="kyc-badge pending">Pending</span>}</td>
                       </tr>
                     )})}
@@ -855,23 +822,7 @@ export default function App() {
                 </table>
               </div>
               )
-            })() : (view?.offers && view.offers.length > 0 && (
-              <ul className="offers" style={{ marginTop: 16 }}>
-                {view.offers.map((o) => (
-                  <li key={o.offerId} className="offer status-open">
-                    <div>
-                      <div className="o-buyer">
-                        {o.buyerLabel}
-                        {o.kyc
-                          ? <span className="kyc-badge ok" title={`${o.kyc.level} · ${o.kyc.jurisdiction}`}>✓ KYC</span>
-                          : <span className="kyc-badge pending">KYC pending</span>}
-                      </div>
-                      <div className="o-terms mono">{o.quantity.toLocaleString()} units · {o.submittedAt}</div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ))}
+            })() : null}
 
             <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
               <div className="legs">
