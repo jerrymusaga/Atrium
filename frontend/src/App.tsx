@@ -3,16 +3,21 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
-import type { AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LifecycleKind, ReadinessResult, Viewer } from './types'
+import type { Asset, AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LifecycleKind, ReadinessResult, Viewer } from './types'
+import { ASSETS } from './types'
 
 const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
 
 const LIVE = import.meta.env.VITE_LIVE === '1'
 const client = LIVE ? httpClient : mockClient
 
-// Format a per-share cBTC rate readably even when it's a small fraction.
+// Format a per-share rate readably even when it's a small fraction.
 function fmtRate(n: number) {
   return n >= 1 ? n.toFixed(2) : n.toPrecision(2)
+}
+// USD formatter (round; compact for big figures).
+function fmtUsd(n: number) {
+  return '$' + Math.round(n).toLocaleString()
 }
 
 // The human-readable resolution an approver signs in the ceremony modal.
@@ -67,6 +72,7 @@ export default function App() {
   const [inviteName, setInviteName] = useState('')
   const [inviteTier, setInviteTier] = useState(1)
   const [commitAmt, setCommitAmt] = useState('')
+  const [commitAsset, setCommitAsset] = useState<Asset>('USDCx')
   const [committing, setCommitting] = useState(false)
   const [approving, setApproving] = useState(false)
   const [signing, setSigning] = useState(false)
@@ -75,12 +81,12 @@ export default function App() {
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [tampering, setTampering] = useState<string | null>(null)
-  const [distAmount, setDistAmount] = useState('10')
+  const [distAmount, setDistAmount] = useState('500000')
   const [declaring, setDeclaring] = useState(false)
   // Founder "set up the room" flow
-  const [setupTitle, setSetupTitle] = useState('Halden Robotics — 25 cBTC Series A')
+  const [setupTitle, setSetupTitle] = useState('Halden Robotics — $2.5M Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
-  const [setupTarget, setSetupTarget] = useState('25')
+  const [setupTarget, setSetupTarget] = useState('2500000')
   const [setupQuantity, setSetupQuantity] = useState('120000')
   const [setupTiers, setSetupTiers] = useState<string[]>([...DEMO_TIERS])
   const [creatingDeal, setCreatingDeal] = useState(false)
@@ -158,16 +164,17 @@ export default function App() {
   }
 
 
-  async function commitCBTC() {
+  async function commit() {
     const amt = Number(commitAmt)
     if (!(amt > 0)) return
     setCommitting(true)
     setMsg(null)
     try {
-      await client.commitCBTC(viewer, amt)
+      await client.commit(viewer, commitAsset, amt)
       setCommitAmt('')
       await load(true)
-      setMsg(`Committed ${amt} cBTC on-ledger — the founder can see your commitment toward the raise target.`)
+      const usd = amt * (view?.rates?.[commitAsset] ?? 0)
+      setMsg(`Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) on-ledger — the founder sees your commitment toward the raise target.`)
     } catch (e) { setMsg((e as Error).message) } finally { setCommitting(false) }
   }
 
@@ -202,12 +209,12 @@ export default function App() {
 
   async function declareDistribution() {
     const amt = Number(distAmount)
-    if (!(amt > 0)) { setMsg('Set a total cBTC amount to distribute.'); return }
+    if (!(amt > 0)) { setMsg('Set a total USD amount to distribute.'); return }
     setDeclaring(true); setMsg(null)
     try {
       await client.distribute(viewer, amt)
       await load(true)
-      setMsg(`Declared a ${amt.toLocaleString()} cBTC distribution — every shareholder was paid pro-rata in one atomic transaction; each sees only their own receipt.`)
+      setMsg(`Declared a ${fmtUsd(amt)} distribution (USDCx) — every shareholder was paid pro-rata in one atomic transaction; each sees only their own receipt.`)
     } catch (e) { setMsg((e as Error).message) } finally { setDeclaring(false) }
   }
 
@@ -222,7 +229,7 @@ export default function App() {
       await client.createDeal(viewer, { title: setupTitle, instrument: setupInstrument, raiseTarget: target, quantity, tiers })
       await refreshViewers()
       await load(true)
-      setMsg(`Deal room created — ${target} cBTC for ${quantity.toLocaleString()} shares, tiers ${tiers.join(' · ')}. Now add documents and invite investors.`)
+      setMsg(`Deal room created — ${fmtUsd(target)} for ${quantity.toLocaleString()} shares, tiers ${tiers.join(' · ')}. Now add documents and invite investors.`)
     } catch (e) { setMsg((e as Error).message) } finally { setCreatingDeal(false) }
   }
 
@@ -314,7 +321,7 @@ export default function App() {
             <dl className="deal-meta">
               <div><dt>Instrument</dt><dd className="mono">{view.deal.instrument}</dd></div>
               <div><dt>Equity on offer</dt><dd className="mono">{view.deal.quantity.toLocaleString()} units</dd></div>
-              {view.deal.raiseTarget ? <div><dt>Raise target</dt><dd className="mono">{view.deal.raiseTarget} cBTC</dd></div> : null}
+              {view.deal.raiseTarget ? <div><dt>Raise target</dt><dd className="mono">{fmtUsd(view.deal.raiseTarget)}</dd></div> : null}
               <div><dt>Deal ref</dt><dd className="mono">{view.deal.dealId}</dd></div>
             </dl>
             {isSeller && !view.settled && (
@@ -396,8 +403,8 @@ export default function App() {
                 <input className="field" value={setupInstrument} onChange={(e) => setSetupInstrument(e.target.value)} placeholder="e.g. HALDEN-EQUITY" />
               </label>
               <label className="setup-field">
-                <span className="setup-lbl">Raise target (cBTC)</span>
-                <input className="field" inputMode="decimal" value={setupTarget} onChange={(e) => setSetupTarget(e.target.value)} placeholder="25" />
+                <span className="setup-lbl">Raise target (USD)</span>
+                <input className="field" inputMode="decimal" value={setupTarget} onChange={(e) => setSetupTarget(e.target.value)} placeholder="2500000" />
               </label>
               <label className="setup-field">
                 <span className="setup-lbl">
@@ -442,7 +449,7 @@ export default function App() {
               </button>
             </div>
             <p className="panel-note setup-demo-note">
-              The demo seeds three investors, multi-tier documents, cBTC commitments
+              The demo seeds three investors committing in USDCx / cBTC / cETH, multi-tier documents
               and the Board / Legal / Compliance roles — everything needed to drive the close.
             </p>
           </section>
@@ -572,7 +579,7 @@ export default function App() {
             </div>
             <p className="panel-note">
               Every state change on Canton, in order: access grants · document disclosures ·
-              cBTC commitments · governance approvals · settlement. Tamper-proof and ledger-timestamped —
+              capital commitments · governance approvals · settlement. Tamper-proof and ledger-timestamped —
               the complete record of how this deal reached close.
             </p>
             <ol className="audit">
@@ -712,12 +719,12 @@ export default function App() {
           </section>
         )}
 
-        {/* ── Investor: commit cBTC into the round ── */}
+        {/* ── Investor: commit capital (USDCx / cBTC / cETH) into the round ── */}
         {current.role === 'buyer' && !view?.settled && (
           <section className="panel">
             <div className="panel-head">
               <h2>Your position</h2>
-              <span className="count mono">cBTC commitment</span>
+              <span className="count mono">multi-asset commitment</span>
             </div>
             {view?.kyc && (
               <p className="panel-note kyc-line">
@@ -728,31 +735,39 @@ export default function App() {
             {view?.myCommitment ? (
               <>
                 <div className="commit-status">
-                  <span className="commit-amt mono">{view.myCommitment.amount} cBTC</span>
-                  <span className="commit-label">locked on-ledger since {view.myCommitment.committedAt}</span>
+                  <span className="commit-amt mono">{view.myCommitment.amount} {view.myCommitment.asset}</span>
+                  <span className="commit-label">= {fmtUsd(view.myCommitment.usdValue)} · locked on-ledger since {view.myCommitment.committedAt}</span>
                 </div>
                 <p className="panel-note">
-                  Your equity is allocated <strong>pro-rata to your commitment</strong> — it appears in the cap table the instant the round closes.
+                  Your equity is allocated <strong>pro-rata to your USD value committed</strong> — it appears in the cap table the instant the round closes.
                 </p>
               </>
             ) : (
               <>
-                <div className="bid-row">
+                <div className="commit-row">
+                  <select className="field asset-sel" value={commitAsset} onChange={(e) => setCommitAsset(e.target.value as Asset)}>
+                    {ASSETS.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
                   <input
                     className="field"
                     inputMode="decimal"
-                    placeholder="cBTC to commit (e.g. 12)"
+                    placeholder={`${commitAsset} to commit`}
                     value={commitAmt}
                     onChange={(e) => setCommitAmt(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commitCBTC() }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commit() }}
                   />
-                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commitCBTC}>
-                    {committing ? 'Locking cBTC…' : 'Commit cBTC'}
+                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commit}>
+                    {committing ? 'Locking…' : 'Commit'}
                   </button>
                 </div>
+                {Number(commitAmt) > 0 && view?.rates && (
+                  <p className="panel-note commit-usd mono">
+                    = {fmtUsd(Number(commitAmt) * (view.rates[commitAsset] ?? 0))} @ oracle {fmtUsd(view.rates[commitAsset] ?? 0)}/{commitAsset}
+                  </p>
+                )}
                 <p className="panel-note">
-                  A fixed-price round: {view?.deal?.raiseTarget ?? 25} cBTC for the {(view?.deal?.quantity ?? 120000).toLocaleString()}-share
-                  stake on offer. Your equity is allocated pro-rata to your commitment at close. Rival investors can’t see your commitment.
+                  A <strong>{fmtUsd(view?.deal?.raiseTarget ?? 0)}</strong> round for the {(view?.deal?.quantity ?? 120000).toLocaleString()}-share
+                  stake. Commit in <strong>USDCx, cBTC, or cETH</strong> — valued in USD via the oracle; your equity is allocated pro-rata to that value at close. Rivals can’t see your commitment.
                 </p>
               </>
             )}
@@ -802,8 +817,15 @@ export default function App() {
               <>
                 <div className="conditions-bar-wrap">
                   <div className="conditions-bar" style={{ width: `${conds.percentFunded}%` }} />
-                  <span className="conditions-bar-label mono">{conds.totalCommitted} / {conds.raiseTarget} cBTC raised ({conds.percentFunded}%)</span>
+                  <span className="conditions-bar-label mono">{fmtUsd(conds.totalCommitted)} / {fmtUsd(conds.raiseTarget)} raised ({conds.percentFunded}%)</span>
                 </div>
+                {conds.committedByAsset && conds.committedByAsset.length > 0 && (
+                  <div className="asset-mix mono">
+                    {conds.committedByAsset.map((a) => (
+                      <span key={a.asset} className={`asset-chip asset-${a.asset}`}>{a.amount} {a.asset} · {fmtUsd(a.usdValue)}</span>
+                    ))}
+                  </div>
+                )}
 
                 <ul className="conditions-list">
                   {conds.conditions.map((c) => (
@@ -820,34 +842,36 @@ export default function App() {
 
             {/* The round book: each committed investor + their pro-rata equity allocation */}
             {view?.investorsDetail && view.investorsDetail.length > 0 ? (() => {
-              const totalCommitted = view.investorsDetail.reduce((s, i) => s + (i.committed ?? 0), 0) || 1
+              const totalUsd = view.investorsDetail.reduce((s, i) => s + (i.committedUsd ?? 0), 0) || 1
               const stakeShares = view.deal?.quantity ?? 120000
               const companyShares = (view.capTable ?? []).reduce((s, r) => s + r.shares, 0) || 1000000
               const stakePct = (stakeShares / companyShares) * 100
               return (
               <div className="inv-table-wrap">
-                <div className="eyebrow" style={{ marginBottom: 8 }}>The round book — pro-rata allocation</div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>The round book — pro-rata by USD value</div>
                 <table className="inv-table">
                   <thead>
                     <tr>
                       <th>Investor</th>
                       <th>Tier</th>
-                      <th>cBTC committed</th>
+                      <th>Committed</th>
+                      <th>USD value</th>
                       <th>Allocation ({stakePct.toFixed(0)}% round)</th>
                       <th>KYC</th>
                     </tr>
                   </thead>
                   <tbody>
                     {view.investorsDetail.map((inv) => {
-                      const shares = inv.committed ? Math.round((inv.committed / totalCommitted) * stakeShares) : 0
-                      const pct = inv.committed ? (inv.committed / totalCommitted) * stakePct : 0
+                      const shares = inv.committedUsd ? Math.round((inv.committedUsd / totalUsd) * stakeShares) : 0
+                      const pct = inv.committedUsd ? (inv.committedUsd / totalUsd) * stakePct : 0
                       return (
                       <tr key={inv.name}>
                         <td className="inv-name">{inv.name}</td>
                         <td className="mono">T{inv.tier}</td>
                         <td className={`mono inv-cbtc${inv.committed === null ? ' none' : ''}`}>
-                          {inv.committed !== null ? `${inv.committed} cBTC` : '—'}
+                          {inv.committed !== null ? `${inv.committed} ${inv.asset}` : '—'}
                         </td>
+                        <td className="mono">{inv.committedUsd !== null ? fmtUsd(inv.committedUsd) : <span className="muted-note">—</span>}</td>
                         <td className="mono">{shares ? `${shares.toLocaleString()} sh · ${pct.toFixed(2)}%` : <span className="muted-note">—</span>}</td>
                         <td>{inv.kyc ? <span className="kyc-badge ok">✓ KYB</span> : <span className="kyc-badge pending">Pending</span>}</td>
                       </tr>
@@ -859,7 +883,7 @@ export default function App() {
             })() : (
               <p className="panel-note round-empty">
                 No investors in the round yet — invite one from the left rail. Each will appear here
-                with their pro-rata allocation as they commit cBTC.
+                with their pro-rata allocation as they commit capital.
               </p>
             )}
 
@@ -867,8 +891,8 @@ export default function App() {
               <div className="legs">
                 {view?.holdings.map((h, i) => (
                   <div key={i} className={`leg ${view?.settled ? 'leg-swapped' : ''}`}>
-                    <div className="leg-amt mono">{h.instrument === 'cBTC' ? `${h.amount.toLocaleString()} cBTC` : h.amount.toLocaleString()}</div>
-                    <div className="leg-inst mono">{h.instrument}</div>
+                    <div className="leg-amt mono">{h.instrument === 'USD' ? fmtUsd(h.amount) : h.amount.toLocaleString()}</div>
+                    <div className="leg-inst mono">{h.instrument === 'USD' ? 'capital (USDCx·cBTC·cETH)' : h.instrument}</div>
                     <div className="leg-owner"><span className="leg-arrow">{view?.settled ? '→ ' : ''}</span>{h.ownerLabel}</div>
                   </div>
                 ))}
@@ -883,7 +907,7 @@ export default function App() {
                     title={allGreen ? '' : 'All 4 conditions must be green before closing'}
                     onClick={settle}
                   >
-                    {settling ? 'Settling cBTC ↔ equity in one transaction…' : 'Close — cBTC ↔ equity, atomically'}
+                    {settling ? 'Settling capital ↔ equity in one transaction…' : 'Close — capital ↔ equity, atomically'}
                   </button>
                   <button className="btn ghost wide stress" disabled={settling} onClick={stressClose}>
                     Stress-test: pull a leg mid-close →
@@ -900,7 +924,7 @@ export default function App() {
 
               {view?.settled && (
                 <div className="settled-banner">
-                  <strong>One transaction.</strong> cBTC and equity swapped together — or not at all.
+                  <strong>One transaction.</strong> Capital and equity swapped together — or not at all.
                 </div>
               )}
             </div>
@@ -918,7 +942,7 @@ export default function App() {
             </div>
             <div className="attest">
               <button className="btn wide" onClick={verifyClose}>
-                Verify the founder received exactly the committed cBTC
+                Verify the founder received exactly the committed capital
               </button>
               {attestation && (
                 <div className={`attest-card ${attestation.matched ? 'ok' : 'pending'}`}>
@@ -926,7 +950,7 @@ export default function App() {
                     <>
                       <div className="attest-line">
                         <span className="mono">{attestation.matched ? '✓ VERIFIED' : '✗ MISMATCH'}</span>
-                        settled raise {attestation.settledCash} cBTC {attestation.matched ? '=' : '≠'} investor commitments {attestation.expectedCash} cBTC
+                        settled raise {fmtUsd(attestation.settledCash)} {attestation.matched ? '=' : '≠'} investor commitments {fmtUsd(attestation.expectedCash)}
                       </div>
                       <div className="attest-sub">
                         Attested from the on-ledger commitments and the settlement legs — <strong>without any tier-2 document access</strong>.
@@ -961,7 +985,7 @@ export default function App() {
               {view.settled
                 ? 'Settled — the 12% round was allocated pro-rata to each committed investor; the registry now reflects every new holder.'
                 : current.role === 'seller'
-                  ? 'At close, the 12% round is allocated pro-rata to each committed investor — proportional to their cBTC.'
+                  ? 'At close, the round is allocated pro-rata to each committed investor — proportional to their USD value committed (any mix of USDCx / cBTC / cETH).'
                   : 'Your tokenized ownership appears here once the round closes, pro-rata to your commitment.'}
             </p>
           </section>
@@ -976,12 +1000,12 @@ export default function App() {
                 <div className="panel-head">
                   <h2>Capital distribution</h2>
                   <span className={`chip mono ${view.distribution ? 'settled' : ''}`}>
-                    {view.distribution ? `● ${view.distribution.total.toLocaleString()} cBTC declared` : '○ none declared'}
+                    {view.distribution ? `● ${fmtUsd(view.distribution.total)} declared` : '○ none declared'}
                   </span>
                 </div>
                 <p className="panel-note">
-                  Atrium runs the ongoing cap table, not just the close. Declare a pro-rata cBTC
-                  distribution and every shareholder is paid in <strong>one atomic transaction</strong> — each
+                  Atrium runs the ongoing cap table, not just the close. Declare a pro-rata
+                  distribution (paid in <strong>USDCx</strong>) and every shareholder is paid in <strong>one atomic transaction</strong> — each
                   receiving a <strong>private receipt only they can see</strong>. Rival holders never learn each other's payouts.
                 </p>
 
@@ -993,7 +1017,7 @@ export default function App() {
                   return (
                     <>
                       <div className="bid-row">
-                        <input className="field" inputMode="decimal" placeholder="Total cBTC to distribute" value={distAmount} onChange={(e) => setDistAmount(e.target.value)} />
+                        <input className="field" inputMode="decimal" placeholder="Total USD to distribute (in USDCx)" value={distAmount} onChange={(e) => setDistAmount(e.target.value)} />
                         <button className="btn solid" disabled={declaring || !(amt > 0)} onClick={declareDistribution}>
                           {declaring ? 'Paying every holder atomically…' : 'Declare distribution'}
                         </button>
@@ -1005,12 +1029,12 @@ export default function App() {
                             <tr key={r.holderLabel}>
                               <td className="inv-name">{r.holderLabel}</td>
                               <td className="mono">{r.shares.toLocaleString()}</td>
-                              <td className="mono">{Math.round(r.shares * perShare).toLocaleString()} cBTC</td>
+                              <td className="mono">{fmtUsd(r.shares * perShare)} USDCx</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                      <p className="panel-note dist-rate mono">@ {fmtRate(perShare)} cBTC / share · {rows.length} holders · one atomic fan-out</p>
+                      <p className="panel-note dist-rate mono">@ {fmtUsd(perShare)} / share · {rows.length} holders · one atomic fan-out</p>
                     </>
                   )
                 })() : <DistributionTable d={view.distribution} />}
@@ -1022,7 +1046,7 @@ export default function App() {
               <section className="panel panel-dist">
                 <div className="panel-head">
                   <h2>Capital distribution</h2>
-                  <span className="chip mono settled">● {view.distribution.total.toLocaleString()} cBTC</span>
+                  <span className="chip mono settled">● {fmtUsd(view.distribution.total)}</span>
                 </div>
                 <DistributionTable d={view.distribution} />
               </section>
@@ -1036,9 +1060,9 @@ export default function App() {
                   <span className="chip mono settled">● paid</span>
                 </div>
                 <div className="dist-receipt">
-                  <span className="dist-amt mono">{view.myDistribution.amount.toLocaleString()} cBTC</span>
+                  <span className="dist-amt mono">{fmtUsd(view.myDistribution.amount)} USDCx</span>
                   <span className="dist-receipt-sub">
-                    on {view.myDistribution.shares.toLocaleString()} shares · @ {fmtRate(view.myDistribution.perShare)} cBTC/share · {view.myDistribution.declaredAt}
+                    on {view.myDistribution.shares.toLocaleString()} shares · @ {fmtUsd(view.myDistribution.perShare)}/share · {view.myDistribution.declaredAt}
                   </span>
                 </div>
                 <p className="panel-note">
@@ -1133,7 +1157,7 @@ function DistributionTable({ d }: { d: DistributionSummary }) {
   return (
     <>
       <div className="dist-summary mono">
-        <span><strong>{d.total.toLocaleString()} cBTC</strong> paid · {d.recipients.length} holders · @ {fmtRate(d.perShare)} / share · {d.declaredAt}</span>
+        <span><strong>{fmtUsd(d.total)}</strong> paid in USDCx · {d.recipients.length} holders · @ {fmtUsd(d.perShare)} / share · {d.declaredAt}</span>
       </div>
       <table className="inv-table dist-preview">
         <thead><tr><th>Holder</th><th>Shares</th><th>Received</th></tr></thead>
@@ -1142,7 +1166,7 @@ function DistributionTable({ d }: { d: DistributionSummary }) {
             <tr key={r.holderLabel}>
               <td className="inv-name">{r.holderLabel}</td>
               <td className="mono">{r.shares.toLocaleString()}</td>
-              <td className="mono">{r.amount.toLocaleString()} cBTC</td>
+              <td className="mono">{fmtUsd(r.amount)} USDCx</td>
             </tr>
           ))}
         </tbody>

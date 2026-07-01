@@ -41,8 +41,8 @@ export const httpClient: LedgerClient = {
   async submitOffer(viewer: PartyId, pricePerUnit: number) {
     await post(`/deals/${DEAL}/offer`, { party: viewer, pricePerUnit })
   },
-  async commitCBTC(viewer: PartyId, amount: number) {
-    await post(`/deals/${DEAL}/commit`, { party: viewer, amount })
+  async commit(viewer: PartyId, asset: string, amount: number) {
+    await post(`/deals/${DEAL}/commit`, { party: viewer, asset, amount })
   },
   async approve(viewer: PartyId, role: string, sig?: { signedBy: string; envelopeId: string }) {
     await post(`/deals/${DEAL}/approve`, { party: viewer, role, signedBy: sig?.signedBy, envelopeId: sig?.envelopeId })

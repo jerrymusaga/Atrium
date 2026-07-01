@@ -5,6 +5,7 @@ dist/
 .env
 .DS_Store
 
+
 # generated build artifacts
 *.tsbuildinfo
 frontend/vite.config.js
@@ -13,3 +14,4 @@ ledger/log/
 
 # persisted encrypted document vault (ciphertext blobs)
 backend/vault/
+docs

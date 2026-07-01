@@ -85,6 +85,11 @@ export type LifecycleEvent = {
   detail: string      // human-readable description of the ledger event
 }
 
+// Multi-asset: investors commit in any CIP-56 asset; the round is denominated in USD.
+export type Asset = 'USDCx' | 'cBTC' | 'cETH'
+export const ASSETS: Asset[] = ['USDCx', 'cBTC', 'cETH']
+export type Rates = Record<Asset, number>   // USD price per unit (oracle; USDCx = 1)
+
 export type ConditionItem = {
   key: string
   label: string
@@ -99,21 +104,26 @@ export type CommitmentDetail = {
   committedAt: string
 }
 
+export type AssetTotal = { asset: Asset; amount: number; usdValue: number }
+
 export type DealConditions = {
-  raiseTarget: number
-  totalCommitted: number
+  raiseTarget: number        // USD
+  totalCommitted: number     // USD
   percentFunded: number
   conditions: ConditionItem[]
   allGreen: boolean
   commitmentCids?: string[]
   approvalCids?: string[]
   commitmentsDetail?: CommitmentDetail[]
+  committedByAsset?: AssetTotal[]   // the USD-denominated round, broken down by CIP-56 asset
 }
 
 export type InvestorSummary = {
   name: string
   tier: number
-  committed: number | null
+  asset: Asset | null        // the asset this investor committed in
+  committed: number | null   // amount in that asset
+  committedUsd: number | null
   committedAt: string | null
   hasBid: boolean
   kyc: KYC | null
@@ -143,12 +153,13 @@ export type DealView = {
   settled: boolean
   kyc?: KYC | null
   conditions?: DealConditions
-  myCommitment?: { amount: number; committedAt: string } | null
+  myCommitment?: { asset: Asset; amount: number; usdValue: number; committedAt: string } | null
   myApproval?: { role: string; approvedAt: string; envelopeId?: string; documentHash?: string } | null
   investorsDetail?: InvestorSummary[]   // founder lens: per-investor competing bids table
   lifecycle?: LifecycleEvent[]          // founder / oversight lens: unified on-chain audit trail
   distribution?: DistributionSummary | null   // founder / regulator: declared capital distribution
   myDistribution?: MyDistribution | null       // holder lens: their own private payout receipt
+  rates?: Rates                          // the price oracle (USD per unit) used to value commitments
 }
 
 // Provable integrity — proof that the off-chain vault still matches what Canton recorded.

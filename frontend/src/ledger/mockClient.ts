@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, AskResult, CapTableRow, CloseAttestation, ConditionItem, Deal, DealSetup, DealView, DistributionSummary, DocContent, Document, Holding, IntegrityReport, InvestorSummary, MyDistribution, Offer, ReadinessResult, Viewer } from '../types'
+import type { AccessEvent, Asset, AssetTotal, AskResult, CapTableRow, CloseAttestation, ConditionItem, Deal, DealSetup, DealView, DistributionSummary, DocContent, Document, Holding, IntegrityReport, InvestorSummary, MyDistribution, Offer, Rates, ReadinessResult, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger — the full Capital Markets OS fundraise,
@@ -29,13 +29,18 @@ let VIEWERS: Viewer[] = [
 const tierLabel = (t: number) => (t >= 2 ? 'tier 1+2' : 'tier 1')
 const roleOf = (viewer: PartyId) => VIEWERS.find((v) => v.party === viewer)?.role
 
+// Price oracle (USD per unit) — Chainlink in production; fixed here for the demo. The round is
+// denominated in USD; investors commit any CIP-56 asset and it's valued at these rates. USDCx = par.
+const RATES: Rates = { USDCx: 1, cBTC: 100000, cETH: 4000 }
+const usdOf = (asset: Asset, amount: number) => amount * (RATES[asset] ?? 0)
+
 let deal: Deal = {
   dealId: 'HALDEN-2026-A',
-  title: 'Halden Robotics — 25 cBTC Series A',
+  title: 'Halden Robotics — $2.5M Series A',
   seller: SELLER,
   instrument: 'HALDEN-EQUITY',
   quantity: 120000,
-  raiseTarget: 25,
+  raiseTarget: 2500000,   // USD
   tiers: ['Teaser', 'Financials', 'Legal'],
 }
 const tierName = (t: number) => deal.tiers?.[t - 1] ?? `Tier ${t}`
@@ -127,11 +132,12 @@ let kyc: Record<PartyId, { level: string; jurisdiction: string }> = {
   [BUYER_C]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' },
 }
 
-// investor -> locked cBTC commitment toward the raise. Seeded at 20/25 (80%); Prometheus
-// commits the final 5 during the demo to tip the raise over its target.
-let commitments: Record<PartyId, { amount: number; committedAt: string }> = {
-  [BUYER_A]: { amount: 8, committedAt: '10:15' },
-  [BUYER_B]: { amount: 12, committedAt: '10:40' },
+// investor -> locked multi-asset commitment toward the USD-denominated raise. Seeded at
+// $2.3M/$2.5M (Boranic in cBTC, Meridian in cETH); Prometheus tops it up in USDCx during the demo.
+type Commit = { asset: Asset; amount: number; committedAt: string }
+let commitments: Record<PartyId, Commit> = {
+  [BUYER_A]: { asset: 'cBTC', amount: 15, committedAt: '10:15' },  // $1.5M
+  [BUYER_B]: { asset: 'cETH', amount: 200, committedAt: '10:40' }, // $0.8M
 }
 
 // governance role -> approval (with the e-signature attestation). Seeded empty so judges click through.
@@ -163,7 +169,7 @@ const investorParties = () => Object.keys(grants)
 
 // Restore the full seeded Halden demo (used at load + by "Load the fundraise demo").
 function seedDemo() {
-  deal = { dealId: 'HALDEN-2026-A', title: 'Halden Robotics — 25 cBTC Series A', seller: SELLER, instrument: 'HALDEN-EQUITY', quantity: 120000, raiseTarget: 25, tiers: ['Teaser', 'Financials', 'Legal'] }
+  deal = { dealId: 'HALDEN-2026-A', title: 'Halden Robotics — $2.5M Series A', seller: SELLER, instrument: 'HALDEN-EQUITY', quantity: 120000, raiseTarget: 2500000, tiers: ['Teaser', 'Financials', 'Legal'] }
   hasDeal = true
   VIEWERS = [
     { party: SELLER, label: 'Halden (Founder)', role: 'seller' },
@@ -177,7 +183,7 @@ function seedDemo() {
   ]
   grants = { [BUYER_A]: 1, [BUYER_B]: 2, [BUYER_C]: 1 }
   kyc = { [BUYER_A]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' }, [BUYER_B]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' }, [BUYER_C]: { level: 'KYB-INSTITUTIONAL', jurisdiction: 'US' } }
-  commitments = { [BUYER_A]: { amount: 8, committedAt: '10:15' }, [BUYER_B]: { amount: 12, committedAt: '10:40' } }
+  commitments = { [BUYER_A]: { asset: 'cBTC', amount: 15, committedAt: '10:15' }, [BUYER_B]: { asset: 'cETH', amount: 200, committedAt: '10:40' } }
   approvals = {}
   accessTrail = [
     { buyer: BUYER_A, buyerLabel: 'Boranic', docId: 'teaser', docTitle: 'Investment teaser', accessedAt: '09:14' },
@@ -210,14 +216,21 @@ function clearRound() {
 }
 
 // The conditional-close gate, computed live from commitments + approvals (mirrors Deal.Close).
+// Everything is normalized to USD via the oracle, so mixed-asset commitments sum cleanly.
 function committedTotal() {
-  return Object.values(commitments).reduce((s, c) => s + c.amount, 0)
+  return Object.values(commitments).reduce((s, c) => s + usdOf(c.asset, c.amount), 0)
 }
+function committedByAsset(): AssetTotal[] {
+  const by: Partial<Record<Asset, number>> = {}
+  for (const c of Object.values(commitments)) by[c.asset] = (by[c.asset] ?? 0) + c.amount
+  return (Object.keys(by) as Asset[]).map((asset) => ({ asset, amount: by[asset]!, usdValue: usdOf(asset, by[asset]!) }))
+}
+const fmtUsd = (n: number) => '$' + Math.round(n).toLocaleString()
 function conditionList(): ConditionItem[] {
   const target = deal.raiseTarget ?? 0
   const tc = committedTotal()
   return [
-    { key: 'FUNDED',     label: `Raise target (${target} cBTC)`, done: tc >= target, detail: `${tc} / ${target} cBTC` },
+    { key: 'FUNDED',     label: `Raise target (${fmtUsd(target)})`, done: tc >= target, detail: `${fmtUsd(tc)} / ${fmtUsd(target)}` },
     { key: 'BOARD',      label: 'Board approval',     done: !!approvals['BOARD'],      approvedAt: approvals['BOARD']?.approvedAt },
     { key: 'LEGAL',      label: 'Legal approval',     done: !!approvals['LEGAL'],      approvedAt: approvals['LEGAL']?.approvedAt },
     { key: 'COMPLIANCE', label: 'Compliance / KYC',   done: !!approvals['COMPLIANCE'], approvedAt: approvals['COMPLIANCE']?.approvedAt },
@@ -225,26 +238,26 @@ function conditionList(): ConditionItem[] {
 }
 const isAllGreen = () => conditionList().every((c) => c.done)
 
-// Pro-rata allocation: at close, the 120,000-share (12%) round is split across every committed
-// investor in proportion to their cBTC commitment. No single "winner" — it's a primary round.
-function allocations(): { party: PartyId; label: string; cbtc: number; shares: number }[] {
+// Pro-rata allocation: at close, the round stake is split across every committed investor in
+// proportion to their USD VALUE committed (mixed assets normalized via the oracle). No "winner".
+function allocations(): { party: PartyId; label: string; usdValue: number; shares: number }[] {
   const total = committedTotal() || 1
   return Object.entries(commitments)
-    .map(([p, c]) => ({ party: p, label: labelOf(p), cbtc: c.amount, shares: Math.round((c.amount / total) * stakeShares()) }))
+    .map(([p, c]) => ({ party: p, label: labelOf(p), usdValue: usdOf(c.asset, c.amount), shares: Math.round((usdOf(c.asset, c.amount) / total) * stakeShares()) }))
     .sort((a, b) => b.shares - a.shares)
 }
 
 function holdings(): Holding[] {
   const raised = committedTotal()
-  // The two atomic legs: the pooled committed cBTC vs the round's equity stake. They swap together.
+  // The two atomic legs: the pooled committed capital (USD, mixed CIP-56 assets) vs the equity stake.
   if (!settled) {
     return [
-      { owner: '_investors', ownerLabel: 'Investors (committed)', instrument: 'cBTC', amount: raised },
+      { owner: '_investors', ownerLabel: 'Investors (committed)', instrument: 'USD', amount: raised },
       { owner: SELLER, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: stakeShares() },
     ]
   }
   return [
-    { owner: SELLER, ownerLabel: 'Halden', instrument: 'cBTC', amount: raised },
+    { owner: SELLER, ownerLabel: 'Halden', instrument: 'USD', amount: raised },
     { owner: '_investors', ownerLabel: 'Round investors', instrument: 'HALDEN-EQUITY', amount: stakeShares() },
   ]
 }
@@ -315,12 +328,13 @@ export const mockClient: LedgerClient = {
     return name
   },
 
-  // Investor locks cBTC toward the raise (creates an on-ledger Commitment in the live version).
-  async commitCBTC(viewer: PartyId, amount: number) {
-    if (roleOf(viewer) !== 'buyer') throw new Error('Only an investor can commit cBTC')
-    if (!(amount > 0)) throw new Error('Enter a cBTC amount')
+  // Investor locks capital toward the USD-denominated raise, in any CIP-56 asset (USDCx/cBTC/cETH).
+  async commit(viewer: PartyId, asset: Asset, amount: number) {
+    if (roleOf(viewer) !== 'buyer') throw new Error('Only an investor can commit')
+    if (!(amount > 0)) throw new Error('Enter an amount')
+    if (!RATES[asset]) throw new Error('Unsupported asset')
     await wait(150)
-    commitments = { ...commitments, [viewer]: { amount, committedAt: new Date().toTimeString().slice(0, 5) } }
+    commitments = { ...commitments, [viewer]: { asset, amount, committedAt: new Date().toTimeString().slice(0, 5) } }
     // Committing also registers the investor's participation in the round book.
     if (!offers.some((o) => o.buyer === viewer)) {
       offers = [...offers, { offerId: `o${offers.length + 1}`, buyer: viewer, buyerLabel: labelOf(viewer), pricePerUnit: 1, quantity: stakeShares(), submittedAt: new Date().toTimeString().slice(0, 5), status: 'open' }]
@@ -444,11 +458,14 @@ export const mockClient: LedgerClient = {
         conditions: list,
         allGreen: list.every((c) => c.done),
         commitmentsDetail: Object.entries(commitments).map(([p, c]) => ({ investorLabel: labelOf(p), amount: c.amount, committedAt: c.committedAt })),
+        committedByAsset: committedByAsset(),
       }
       investorsDetail = investorParties().map((p) => ({
         name: labelOf(p),
         tier: grants[p] ?? 1,
+        asset: commitments[p]?.asset ?? null,
         committed: commitments[p]?.amount ?? null,
+        committedUsd: commitments[p] ? usdOf(commitments[p].asset, commitments[p].amount) : null,
         committedAt: commitments[p]?.committedAt ?? null,
         hasBid: offers.some((o) => o.buyer === p),
         kyc: kyc[p] ?? null,
@@ -456,7 +473,9 @@ export const mockClient: LedgerClient = {
     }
 
     // Investor's own commitment; governance role's own approval.
-    const myCommitment = isBuyer && commitments[viewer] ? { amount: commitments[viewer].amount, committedAt: commitments[viewer].committedAt } : null
+    const myCommitment = isBuyer && commitments[viewer]
+      ? { asset: commitments[viewer].asset, amount: commitments[viewer].amount, usdValue: usdOf(commitments[viewer].asset, commitments[viewer].amount), committedAt: commitments[viewer].committedAt }
+      : null
     const myApprovalRole = role === 'board' ? 'BOARD' : role === 'legal' ? 'LEGAL' : role === 'compliance' ? 'COMPLIANCE' : null
     const myApproval = myApprovalRole && approvals[myApprovalRole] ? { role: myApprovalRole, approvedAt: approvals[myApprovalRole].approvedAt } : null
 
@@ -466,7 +485,7 @@ export const mockClient: LedgerClient = {
       lifecycle = [
         ...investorParties().map((p, i) => ({ at: `09:0${i + 1}`, kind: 'grant' as const, actor: labelOf(p), detail: `granted access up to “${tierName(grants[p] ?? 1)}”` })),
         ...accessTrail.map((e) => ({ at: e.accessedAt, kind: 'disclosure' as const, actor: e.buyerLabel, detail: `opened “${e.docTitle}”` })),
-        ...Object.entries(commitments).map(([p, c]) => ({ at: c.committedAt, kind: 'commitment' as const, actor: labelOf(p), detail: `committed ${c.amount} cBTC toward the raise` })),
+        ...Object.entries(commitments).map(([p, c]) => ({ at: c.committedAt, kind: 'commitment' as const, actor: labelOf(p), detail: `committed ${c.amount} ${c.asset} (${fmtUsd(usdOf(c.asset, c.amount))}) toward the raise` })),
         ...Object.values(approvals).map((a) => {
           const resDoc = docs.find((d) => d.docId === `resolution-${a.role.toLowerCase()}`)
           const signer = resDoc ? resDoc.title.split('—').pop()?.trim() : ''
@@ -477,8 +496,8 @@ export const mockClient: LedgerClient = {
         }),
       ].sort((a, b) => a.at.localeCompare(b.at))
       // Settlement, then any post-close distribution, cap the timeline in lifecycle order.
-      if (settled) lifecycle.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' })
-      if (distribution) lifecycle.push({ at: '', kind: 'distribution', actor: 'Registry', detail: `declared ${distribution.total.toLocaleString()} cBTC distribution to ${distribution.recipients.length} holders — pro-rata, one atomic transaction` })
+      if (settled) lifecycle.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'capital ↔ equity swapped atomically — conditional close executed' })
+      if (distribution) lifecycle.push({ at: '', kind: 'distribution', actor: 'Registry', detail: `declared ${fmtUsd(distribution.total)} distribution to ${distribution.recipients.length} holders — pro-rata, one atomic transaction` })
     }
 
     // Capital distribution: founder/regulator see the whole declaration; a holder sees only theirs.
@@ -503,6 +522,7 @@ export const mockClient: LedgerClient = {
       lifecycle,
       distribution: privileged ? distribution : null,
       myDistribution,
+      rates: RATES,
     }
   },
 
@@ -578,7 +598,7 @@ export const mockClient: LedgerClient = {
     const score = docsPts + invPts + bidsPts + fundPts + apprPts
     const narration = score >= 100
       ? 'Deal is 100% ready — fully funded, all governance approvals in. The founder can close.'
-      : `Deal is ${score}% ready — ${Math.round(Math.min(100, (tc / target) * 100))}% funded, ${nApprovals}/3 approvals in${tc >= target ? '' : `, ${target - tc} cBTC to target`}.`
+      : `Deal is ${score}% ready — ${Math.round(Math.min(100, (tc / target) * 100))}% funded, ${nApprovals}/3 approvals in${tc >= target ? '' : `, ${fmtUsd(target - tc)} to target`}.`
     return {
       score,
       narration,
@@ -586,7 +606,7 @@ export const mockClient: LedgerClient = {
         { key: 'DOCS',      label: 'Documents in data room', pts: docsPts, max: 15, detail: docs.length ? `${docs.length} docs${multiTier ? ', multi-tier' : ''}` : 'none yet' },
         { key: 'INVESTORS', label: 'Investors invited',      pts: invPts,  max: 15, detail: `${investorParties().length} investors granted access` },
         { key: 'BIDS',      label: 'Investor commitments',   pts: bidsPts, max: 20, detail: `${committedCount} committed` },
-        { key: 'FUNDING',   label: `Raise target (${target} cBTC)`, pts: fundPts, max: 30, detail: `${tc} / ${target} cBTC (${Math.round((tc / target) * 100)}%)` },
+        { key: 'FUNDING',   label: `Raise target (${fmtUsd(target)})`, pts: fundPts, max: 30, detail: `${fmtUsd(tc)} / ${fmtUsd(target)} (${Math.round((tc / target) * 100)}%)` },
         { key: 'APPROVALS', label: 'Governance approvals',   pts: apprPts, max: 20, detail: `${nApprovals} / 3 required` },
       ],
     }
@@ -637,14 +657,14 @@ export const mockClient: LedgerClient = {
     else tampered.add(docId)
   },
 
-  // Post-close: founder declares a pro-rata cBTC distribution to the whole cap table.
+  // Post-close: founder declares a pro-rata distribution (USD, paid in USDCx) to the whole cap table.
   async distribute(viewer: PartyId, amount: number) {
     if (viewer !== SELLER) throw new Error('Only the founder can declare a distribution')
-    if (!settled) throw new Error('No cBTC treasury — close the deal first.')
+    if (!settled) throw new Error('No treasury — close the deal first.')
     if (!(amount > 0)) throw new Error('amount must be > 0')
-    if (amount > committedTotal()) throw new Error(`Treasury holds ${committedTotal()} cBTC; cannot distribute ${amount}.`)
+    if (amount > committedTotal()) throw new Error(`Treasury holds ${fmtUsd(committedTotal())}; cannot distribute ${fmtUsd(amount)}.`)
     await wait(700)
-    const rows = capTableFor(SELLER, true)            // Founders / ESOP / winning investor
+    const rows = capTableFor(SELLER, true)            // Founders / ESOP / investors
     const totalShares = rows.reduce((s, r) => s + r.shares, 0) || 1
     const perShare = amount / totalShares
     distribution = {
