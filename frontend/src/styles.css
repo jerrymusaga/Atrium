@@ -310,6 +310,8 @@ body {
 .t-arrow { color: var(--muted); }
 .t-doc { color: var(--steel); }
 .empty { color: var(--muted); }
+.empty-room { grid-column: 1 / -1; padding: 22px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: 13px; line-height: 1.55; text-align: center; }
+.round-empty { margin-top: 14px; padding: 16px; border: 1px dashed var(--line); border-radius: 10px; }
 
 /* ---- On-chain audit trail (unified lifecycle timeline) ---- */
 .audit { list-style: none; margin: 4px 0 0; padding: 0; }

@@ -514,6 +514,13 @@ export default function App() {
                   )}
                 </article>
               ))}
+              {view?.documents.length === 0 && (
+                <div className="empty-room">
+                  {current.role === 'seller'
+                    ? 'No documents yet — add the teaser, financials, a term sheet, or upload files below. Each is encrypted and gated to the tier you choose.'
+                    : 'No documents have been shared with you yet.'}
+                </div>
+              )}
             </div>
 
             {current.role === 'seller' && !view?.settled && (
@@ -603,8 +610,10 @@ export default function App() {
 
             {integrity && (
               <>
-                <div className={`integrity-verdict ${integrity.allIntact ? 'ok' : 'breach'}`}>
-                  {integrity.allIntact ? (
+                <div className={`integrity-verdict ${integrity.total === 0 ? '' : integrity.allIntact ? 'ok' : 'breach'}`}>
+                  {integrity.total === 0 ? (
+                    <>No documents in the vault yet — add one and its hash will be anchored on Canton, ready to verify.</>
+                  ) : integrity.allIntact ? (
                     <><span className="iv-mark mono">✓ VERIFIED</span> all {integrity.total} documents match their on-ledger hash byte-for-byte. The off-chain vault is intact. <span className="mono iv-time">checked {integrity.checkedAt}</span></>
                   ) : (
                     <><span className="iv-mark mono">✗ INTEGRITY BREACH</span> {integrity.total - integrity.intactCount} document(s) no longer match the ledger — the off-chain blob was altered. <span className="mono iv-time">checked {integrity.checkedAt}</span></>
@@ -847,7 +856,12 @@ export default function App() {
                 </table>
               </div>
               )
-            })() : null}
+            })() : (
+              <p className="panel-note round-empty">
+                No investors in the round yet — invite one from the left rail. Each will appear here
+                with their pro-rata allocation as they commit cBTC.
+              </p>
+            )}
 
             <div className={`close ${view?.settled ? 'is-settled' : ''} ${settling ? 'is-settling' : ''} ${rollback ? 'is-rollback' : ''}`}>
               <div className="legs">
