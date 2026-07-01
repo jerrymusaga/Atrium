@@ -23,6 +23,11 @@ const DEAL_ID = 'HALDEN-2026-A'
 const DEFAULT_TIERS = ['Teaser', 'Financials', 'Legal']
 const tierLabelOf = (tiers: string[], tier: number) => tiers[tier - 1] ?? `Tier ${tier}`
 
+// Price oracle (USD per unit) — Chainlink in production. The raise is USD-denominated; commitments
+// in any CIP-56 asset (USDCx / cBTC / cETH) are valued here. Surfaced to the frontend for previews.
+const RATES: Record<string, number> = { USDCx: 1, cBTC: 100000, cETH: 4000 }
+const usdOf = (asset: string, amount: number) => amount * (RATES[asset] ?? 0)
+
 const PARTY_PREFIX = process.env.PARTY_PREFIX ?? ''
 const hint = (logical: string) => `${PARTY_PREFIX}${logical}`
 function matchesLogical(full: string, logical: string): boolean {
@@ -160,15 +165,18 @@ app.get('/deals/:dealId/view', async (req, res) => {
     const registry = await partyId('Registry')
     const regAcs = await acsOf(registry)
     const regHoldings = regAcs.filter((c) => entityOf(c.templateId) === 'Holding').map((c) => c.createArgument)
-    const settled = regHoldings.some((h: any) => h.instrument === 'cBTC' && labelFor(h.owner) === SELLER)
-    // The two atomic legs are the pooled round capital vs the 12% stake — show them as aggregates
-    // (the per-investor split lives in the cap table), matching the pro-rata model.
-    const holdings = regHoldings.map((h: any) => {
-      let ownerLabel = labelFor(h.owner)
-      if (!settled && h.instrument === 'cBTC') ownerLabel = 'Investors (committed)'
-      if (settled && h.instrument === 'HALDEN-EQUITY') ownerLabel = 'Round investors'
-      return { owner: h.owner, ownerLabel, instrument: h.instrument, amount: num(h.amount) }
-    })
+    // Post-close the founder holds a 'USD' capital leg (from the atomic swap).
+    const settled = regHoldings.some((h: any) => h.instrument === 'USD' && labelFor(h.owner) === SELLER)
+    // The two atomic legs — the pooled round capital (USD, mixed CIP-56 assets) vs the equity stake —
+    // are synthesized from the live commitments so the display always reflects the current round.
+    const stakeQty = dealC ? num(dealC.quantity) : 0
+    const totalCommittedUsd = sellerView.filter((c) => entityOf(c.templateId) === 'Commitment')
+      .reduce((s, c) => s + num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount))), 0)
+    const holdings = !dealC ? [] : (!settled
+      ? [ { owner: '_investors', ownerLabel: 'Investors (committed)', instrument: 'USD', amount: totalCommittedUsd },
+          { owner: seller, ownerLabel: 'Halden', instrument: 'HALDEN-EQUITY', amount: stakeQty } ]
+      : [ { owner: seller, ownerLabel: 'Halden', instrument: 'USD', amount: totalCommittedUsd },
+          { owner: '_investors', ownerLabel: 'Round investors', instrument: 'HALDEN-EQUITY', amount: stakeQty } ])
 
     const certs = regAcs.filter((c) => entityOf(c.templateId) === 'ShareCertificate').map((c) => c.createArgument)
     const totalShares = certs.reduce((s, c: any) => s + num(c.shares), 0) || 1
@@ -205,15 +213,19 @@ app.get('/deals/:dealId/view', async (req, res) => {
       const raiseTarget = num(dealC.raiseTarget ?? 0)
       const commitments = sellerView.filter((c) => entityOf(c.templateId) === 'Commitment')
       const approvals = sellerView.filter((c) => entityOf(c.templateId) === 'Approval')
-      const totalCommitted = commitments.reduce((sum, c) => sum + num(c.createArgument.amount), 0)
+      // USD-denominated: sum the per-commitment usdValue so mixed CIP-56 assets aggregate cleanly.
+      const usdVal = (c: any) => num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount)))
+      const totalCommitted = commitments.reduce((sum, c) => sum + usdVal(c), 0)
       const percentFunded = raiseTarget > 0 ? Math.min(100, Math.round((totalCommitted / raiseTarget) * 100)) : 0
       const approvalMap = Object.fromEntries(approvals.map((c) => [c.createArgument.role, c]))
       const conditionsList = [
-        { key: 'FUNDED',      label: `Raise target (${raiseTarget} cBTC)`, done: totalCommitted >= raiseTarget, detail: `${totalCommitted} / ${raiseTarget} cBTC` },
+        { key: 'FUNDED',      label: `Raise target ($${Math.round(raiseTarget).toLocaleString()})`, done: totalCommitted >= raiseTarget, detail: `$${Math.round(totalCommitted).toLocaleString()} / $${Math.round(raiseTarget).toLocaleString()}` },
         { key: 'BOARD',       label: 'Board approval',       done: !!approvalMap['BOARD'],       approvedAt: approvalMap['BOARD']?.createArgument.approvedAt?.slice(11, 16) },
         { key: 'LEGAL',       label: 'Legal approval',       done: !!approvalMap['LEGAL'],       approvedAt: approvalMap['LEGAL']?.createArgument.approvedAt?.slice(11, 16) },
         { key: 'COMPLIANCE',  label: 'Compliance / KYC',     done: !!approvalMap['COMPLIANCE'],  approvedAt: approvalMap['COMPLIANCE']?.createArgument.approvedAt?.slice(11, 16) },
       ]
+      const byAsset = new Map<string, number>()
+      for (const c of commitments) byAsset.set(c.createArgument.asset ?? 'cBTC', (byAsset.get(c.createArgument.asset ?? 'cBTC') ?? 0) + num(c.createArgument.amount))
       conditions = {
         raiseTarget, totalCommitted, percentFunded,
         conditions: conditionsList,
@@ -225,20 +237,21 @@ app.get('/deals/:dealId/view', async (req, res) => {
           amount: num(c.createArgument.amount),
           committedAt: String(c.createArgument.committedAt).slice(11, 16),
         })),
+        committedByAsset: Array.from(byAsset.entries()).map(([asset, amount]) => ({ asset, amount, usdValue: usdOf(asset, amount) })),
       }
 
-      // Merge grants + commitments + offers into a per-investor summary for the competing bids table
+      // Merge grants + commitments + offers into a per-investor summary for the round book
       const grantContracts = sellerView.filter((c) => entityOf(c.templateId) === 'AccessGrant')
       const offerContracts = sellerView.filter((c) => entityOf(c.templateId) === 'Offer')
-      const investorMap = new Map<string, { name: string; tier: number; committed: number | null; committedAt: string | null; hasBid: boolean; kyc: any }>()
+      const investorMap = new Map<string, { name: string; tier: number; asset: string | null; committed: number | null; committedUsd: number | null; committedAt: string | null; hasBid: boolean; kyc: any }>()
       for (const g of grantContracts) {
         const name = labelFor(g.createArgument.buyer)
-        if (!investorMap.has(name)) investorMap.set(name, { name, tier: num(g.createArgument.maxTier), committed: null, committedAt: null, hasBid: false, kyc: kycOf(g.createArgument.buyer) })
+        if (!investorMap.has(name)) investorMap.set(name, { name, tier: num(g.createArgument.maxTier), asset: null, committed: null, committedUsd: null, committedAt: null, hasBid: false, kyc: kycOf(g.createArgument.buyer) })
       }
       for (const c of commitments) {
         const name = labelFor(c.createArgument.investor)
         const entry = investorMap.get(name)
-        if (entry) { entry.committed = num(c.createArgument.amount); entry.committedAt = String(c.createArgument.committedAt).slice(11, 16) }
+        if (entry) { entry.asset = c.createArgument.asset ?? 'cBTC'; entry.committed = num(c.createArgument.amount); entry.committedUsd = usdVal(c); entry.committedAt = String(c.createArgument.committedAt).slice(11, 16) }
       }
       for (const o of offerContracts) {
         const name = labelFor(o.createArgument.buyer)
@@ -261,7 +274,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       }
       for (const c of commitments) {
         const a = c.createArgument
-        ev.push({ at: String(a.committedAt), kind: 'commitment', actor: labelFor(a.investor), detail: `committed ${num(a.amount)} cBTC toward the raise` })
+        ev.push({ at: String(a.committedAt), kind: 'commitment', actor: labelFor(a.investor), detail: `committed ${num(a.amount)} ${a.asset ?? 'cBTC'} ($${Math.round(num(a.usdValue ?? usdOf(a.asset ?? 'cBTC', num(a.amount)))).toLocaleString()}) toward the raise` })
       }
       for (const c of approvals) {
         const a = c.createArgument
@@ -277,17 +290,22 @@ app.get('/deals/:dealId/view', async (req, res) => {
       }
       ev.sort((x, y) => Date.parse(x.at) - Date.parse(y.at))
       // Settlement, then any post-close distribution, cap the timeline (in lifecycle order).
-      if (settled) ev.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'cBTC ↔ equity swapped atomically — conditional close executed' })
+      if (settled) ev.push({ at: '', kind: 'settlement', actor: 'Registry', detail: 'capital ↔ equity swapped atomically — conditional close executed' })
       if (distContracts.length > 0) {
         const distTotal = distContracts.reduce((s, d: any) => s + num(d.amount), 0)
-        ev.push({ at: '', kind: 'distribution', actor: 'Registry', detail: `declared ${distTotal} cBTC distribution to ${distContracts.length} holders — pro-rata, one atomic transaction` })
+        ev.push({ at: '', kind: 'distribution', actor: 'Registry', detail: `declared $${Math.round(distTotal).toLocaleString()} distribution to ${distContracts.length} holders — pro-rata, one atomic transaction` })
       }
       lifecycle = ev.map((e) => ({ ...e, at: e.at && e.kind !== 'settlement' && e.kind !== 'distribution' ? e.at.slice(11, 16) : '' }))
     }
 
     // Commitment for a buyer lens
     const myCommitmentC = !isSeller ? byEntity('Commitment')[0] : null
-    const myCommitment = myCommitmentC ? { amount: num(myCommitmentC.createArgument.amount), committedAt: String(myCommitmentC.createArgument.committedAt).slice(11, 16) } : null
+    const myCommitment = myCommitmentC ? {
+      asset: String(myCommitmentC.createArgument.asset ?? 'cBTC'),
+      amount: num(myCommitmentC.createArgument.amount),
+      usdValue: num(myCommitmentC.createArgument.usdValue ?? usdOf(myCommitmentC.createArgument.asset ?? 'cBTC', num(myCommitmentC.createArgument.amount))),
+      committedAt: String(myCommitmentC.createArgument.committedAt).slice(11, 16),
+    } : null
 
     // Approval for a governance role lens
     const myApprovalC = byEntity('Approval')[0]
@@ -303,7 +321,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party),
       conditions, myCommitment, myApproval, investorsDetail, lifecycle,
-      distribution, myDistribution,
+      distribution, myDistribution, rates: RATES,
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -419,9 +437,9 @@ app.post('/deals/:dealId/tamper', async (req, res) => {
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- post-close lifecycle: founder declares a pro-rata cBTC distribution ---
+// --- post-close lifecycle: founder declares a pro-rata USD distribution (paid in USDCx) ---
 // One atomic transaction (DistributionPool.Declare) pays every cap-table holder their pro-rata
-// slice from the founder's post-close cBTC treasury and issues each a PRIVATE receipt — holders
+// slice from the founder's post-close USD treasury and issues each a PRIVATE receipt — holders
 // see only their own. Atrium runs the ongoing cap table, not just the one-shot close.
 app.post('/deals/:dealId/distribute', async (req, res) => {
   try {
@@ -429,7 +447,7 @@ app.post('/deals/:dealId/distribute', async (req, res) => {
     const { party: prefix, amount } = req.body ?? {}
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the founder can declare a distribution' })
     const total = Number(amount)
-    if (!(total > 0)) return res.status(400).json({ error: 'amount (total cBTC to distribute) must be > 0' })
+    if (!(total > 0)) return res.status(400).json({ error: 'amount (total USD to distribute) must be > 0' })
 
     const registry = await partyId('Registry')
     const seller = await partyId(SELLER)
@@ -442,14 +460,14 @@ app.post('/deals/:dealId/distribute', async (req, res) => {
     const perShare = total / totalShares
     const recipients = certs.map((c) => ({ _1: c.createArgument.holder, _2: num(c.createArgument.shares).toFixed(1) }))
 
-    // Treasury = the founder's cBTC holding (received at the close). No close ⇒ no treasury.
-    const treasury = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'cBTC' && c.createArgument.owner === seller)
-    if (!treasury) return res.status(400).json({ error: 'No cBTC treasury — the founder receives cBTC only at the close. Close the deal first.' })
-    if (num(treasury.createArgument.amount) < total) return res.status(400).json({ error: `Treasury holds ${num(treasury.createArgument.amount)} cBTC; cannot distribute ${total}.` })
+    // Treasury = the founder's USD capital holding (received at the close). No close ⇒ no treasury.
+    const treasury = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'USD' && c.createArgument.owner === seller)
+    if (!treasury) return res.status(400).json({ error: 'No treasury — the founder receives capital only at the close. Close the deal first.' })
+    if (num(treasury.createArgument.amount) < total) return res.status(400).json({ error: `Treasury holds $${Math.round(num(treasury.createArgument.amount)).toLocaleString()}; cannot distribute $${Math.round(total).toLocaleString()}.` })
 
-    // The distribution facility — created once, reused for future distributions.
+    // The distribution facility — created once, reused for future distributions (paid in USDCx).
     let pool = regAcs.find((c) => entityOf(c.templateId) === 'DistributionPool')
-    if (!pool) pool = await create(registry, tid('DistributionPool'), { registrar: registry, company: seller, instrument: 'cBTC', distributionId: `DIST-${DEAL_ID}` })
+    if (!pool) pool = await create(registry, tid('DistributionPool'), { registrar: registry, company: seller, instrument: 'USD', distributionId: `DIST-${DEAL_ID}` })
 
     await exercise(registry, pool.templateId, pool.contractId, 'Declare', {
       treasuryCid: treasury.contractId,
@@ -498,22 +516,25 @@ ${context || '(none — this party has no document access)'}`
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
-// --- investor commits cBTC toward the raise ---
-// Creates a Commitment contract (co-signed by investor + registry as admin) that the
-// Deal.Close gate will fetch and sum against the raiseTarget.
+// --- investor commits capital (USDCx / cBTC / cETH) toward the USD-denominated raise ---
+// The Commitment records the asset + amount + its USD value (oracle-priced); the Deal.Close gate
+// sums usdValue against the target, so mixed CIP-56 assets aggregate cleanly.
 app.post('/deals/:dealId/commit', async (req, res) => {
   try {
     await ensurePkg()
-    const { party: prefix, amount } = req.body ?? {}
+    const { party: prefix, asset, amount } = req.body ?? {}
     if (!prefix) return res.status(400).json({ error: 'party required' })
-    const cbtc = Number(amount)
-    if (!(cbtc > 0)) return res.status(400).json({ error: 'amount must be > 0' })
+    const amt = Number(amount)
+    if (!(amt > 0)) return res.status(400).json({ error: 'amount must be > 0' })
+    const a = String(asset ?? 'cBTC')
+    if (!RATES[a]) return res.status(400).json({ error: `unsupported asset ${a} (USDCx / cBTC / cETH)` })
+    const usdValue = usdOf(a, amt)
     const investor = await partyId(prefix)
     const founder  = await partyId(SELLER)
     const admin    = await partyId('Registry')
     const now = new Date().toISOString()
-    await createMulti([investor, admin], tid('Commitment'), { admin, investor, founder, dealId: DEAL_ID, amount: cbtc.toFixed(4), committedAt: now })
-    res.json({ committed: true, amount: cbtc })
+    await createMulti([investor, admin], tid('Commitment'), { admin, investor, founder, dealId: DEAL_ID, asset: a, amount: amt.toFixed(4), usdValue: usdValue.toFixed(4), committedAt: now })
+    res.json({ committed: true, asset: a, amount: amt, usdValue })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -563,11 +584,11 @@ app.get('/deals/:dealId/conditions', async (req, res) => {
     const raiseTarget = num(dealC.raiseTarget ?? 0)
     const commitments = sellerAcs.filter((c) => entityOf(c.templateId) === 'Commitment')
     const approvals = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval')
-    const totalCommitted = commitments.reduce((sum, c) => sum + num(c.createArgument.amount), 0)
+    const totalCommitted = commitments.reduce((sum, c) => sum + num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount))), 0)
     const percentFunded = raiseTarget > 0 ? Math.min(100, Math.round((totalCommitted / raiseTarget) * 100)) : 0
     const approvalMap = Object.fromEntries(approvals.map((c) => [c.createArgument.role, c]))
     const conditionsList = [
-      { key: 'FUNDED',     label: `Raise target (${raiseTarget} cBTC)`, done: totalCommitted >= raiseTarget, detail: `${totalCommitted} / ${raiseTarget} cBTC` },
+      { key: 'FUNDED',     label: `Raise target ($${Math.round(raiseTarget).toLocaleString()})`, done: totalCommitted >= raiseTarget, detail: `$${Math.round(totalCommitted).toLocaleString()} / $${Math.round(raiseTarget).toLocaleString()}` },
       { key: 'BOARD',      label: 'Board approval',    done: !!approvalMap['BOARD'] },
       { key: 'LEGAL',      label: 'Legal approval',    done: !!approvalMap['LEGAL'] },
       { key: 'COMPLIANCE', label: 'Compliance / KYC',  done: !!approvalMap['COMPLIANCE'] },
@@ -596,7 +617,7 @@ app.get('/deals/:dealId/readiness', async (req, res) => {
     const approvals   = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval')
 
     const raiseTarget    = num(dealC.raiseTarget ?? 0)
-    const totalCommitted = commitments.reduce((s, c) => s + num(c.createArgument.amount), 0)
+    const totalCommitted = commitments.reduce((s, c) => s + num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount))), 0)
     const fundingRatio   = raiseTarget > 0 ? Math.min(1, totalCommitted / raiseTarget) : 0
     const approvalCount  = approvals.length
     const requiredCount  = (dealC.requiredApprovals ?? []).length || 3
@@ -607,7 +628,7 @@ app.get('/deals/:dealId/readiness', async (req, res) => {
       { key: 'DOCS',      label: 'Documents in data room', max: 15, pts: docs.length === 0 ? 0 : multiTier ? 15 : 10, detail: docs.length === 0 ? 'No documents yet' : `${docs.length} doc${docs.length > 1 ? 's' : ''}${multiTier ? ', multi-tier' : ''}` },
       { key: 'INVESTORS', label: 'Investors invited',      max: 15, pts: Math.min(15, grants.length * 5), detail: `${grants.length} investor${grants.length !== 1 ? 's' : ''} granted access` },
       { key: 'BIDS',      label: 'Investor commitments',  max: 20, pts: commitments.length === 0 ? 0 : Math.min(20, commitments.length * 7), detail: `${commitments.length} committed` },
-      { key: 'FUNDING',   label: `Raise target (${raiseTarget} cBTC)`, max: 30, pts: Math.round(fundingRatio * 30), detail: raiseTarget > 0 ? `${totalCommitted} / ${raiseTarget} cBTC (${Math.round(fundingRatio * 100)}%)` : 'No raise target set' },
+      { key: 'FUNDING',   label: `Raise target ($${Math.round(raiseTarget).toLocaleString()})`, max: 30, pts: Math.round(fundingRatio * 30), detail: raiseTarget > 0 ? `$${Math.round(totalCommitted).toLocaleString()} / $${Math.round(raiseTarget).toLocaleString()} (${Math.round(fundingRatio * 100)}%)` : 'No raise target set' },
       { key: 'APPROVALS', label: 'Governance approvals',  max: 20, pts: requiredCount > 0 ? Math.round((approvalCount / requiredCount) * 20) : 0, detail: `${approvalCount} / ${requiredCount} required` },
     ]
     const score = Math.min(100, signals.reduce((s, sg) => s + sg.pts, 0))
@@ -675,14 +696,16 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     if (!dealC0 && !breakLeg) return res.status(409).json({ error: 'No deal — set one up first' })
     const stakeQty = dealC0 ? num(dealC0.createArgument.quantity) : 120000
 
-    // The representative committer (largest commitment) drives the atomic swap on behalf of the round.
+    // USD-denominated: value each commitment via the oracle so mixed assets aggregate. The largest
+    // USD committer drives the atomic swap on behalf of the round.
     const commitmentsAcs = sellerAcs0.filter((c) => entityOf(c.templateId) === 'Commitment')
-    const totalCommitted = commitmentsAcs.reduce((s, c) => s + num(c.createArgument.amount), 0)
-    const rep = commitmentsAcs.slice().sort((a, b) => num(b.createArgument.amount) - num(a.createArgument.amount))[0]
+    const cUsd = (c: any) => num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount)))
+    const totalCommitted = commitmentsAcs.reduce((s, c) => s + cUsd(c), 0)
+    const rep = commitmentsAcs.slice().sort((a, b) => cUsd(b) - cUsd(a))[0]
     const buyer = (!breakLeg && rep) ? rep.createArgument.investor : await partyId('Meridian')
 
     // --- Self-heal the settlement scaffolding: no-op on the seeded demo; builds it for a deal a
-    //     founder set up from scratch (mints the cBTC leg from commitments + the equity leg/certs). ---
+    //     founder set up from scratch (mints the USD capital leg from commitments + the equity leg/certs). ---
     if (!breakLeg) {
       const reg0 = await acsOf(registry)
       const hasCert = (pred: (a: any) => boolean) => reg0.some((c) => entityOf(c.templateId) === 'ShareCertificate' && pred(c.createArgument))
@@ -698,8 +721,8 @@ app.post('/deals/:dealId/settle', async (req, res) => {
       if (!hasHold((a) => a.instrument === EQ && a.owner === seller)) {
         await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: EQ, amount: stakeQty.toFixed(1) })
       }
-      if (rep && !hasHold((a) => a.instrument === 'cBTC' && a.owner === buyer)) {
-        await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'cBTC', amount: totalCommitted.toFixed(4) })
+      if (rep && !hasHold((a) => a.instrument === 'USD' && a.owner === buyer)) {
+        await create(registry, tid('Holding'), { admin: registry, owner: buyer, instrument: 'USD', amount: totalCommitted.toFixed(2) })
       }
       if (!reg0.some((c) => entityOf(c.templateId) === 'AllocationFactory')) {
         const investors = Array.from(new Set(commitmentsAcs.map((c) => c.createArgument.investor)))
@@ -734,7 +757,7 @@ app.post('/deals/:dealId/settle', async (req, res) => {
 
     // --- Atomic DvP swap ---
     const regAcs = await acsOf(registry)
-    const cashH  = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'cBTC' && c.createArgument.owner === buyer)
+    const cashH  = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === 'USD' && c.createArgument.owner === buyer)
     const eqH    = regAcs.find((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === EQ   && c.createArgument.owner === seller)
     const factory = regAcs.find((c) => entityOf(c.templateId) === 'AllocationFactory')
     if (!cashH || !eqH || !factory) return res.status(409).json({ error: 'settlement legs not ready' })
@@ -758,20 +781,20 @@ app.post('/deals/:dealId/settle', async (req, res) => {
     await exercise(operator, coord.templateId, coord.contractId, 'Settle', { cashLeg: cashAlloc.contractId, ownershipLeg: eqAlloc.contractId })
 
     // Allocate the round PRO-RATA: archive the founder's stake cert and issue a ShareCertificate
-    // to each committed investor in proportion to their cBTC commitment (no single winner).
+    // to each committed investor in proportion to their USD value committed (no single winner).
     const commitmentsForAlloc = (await acsOf(seller)).filter((c) => entityOf(c.templateId) === 'Commitment')
-    const totalForAlloc = commitmentsForAlloc.reduce((s, c) => s + num(c.createArgument.amount), 0) || 1
+    const totalForAlloc = commitmentsForAlloc.reduce((s, c) => s + cUsd(c), 0) || 1
     const stake = regAcs.find((c) => entityOf(c.templateId) === 'ShareCertificate' && c.createArgument.holder === seller && c.createArgument.instrument === EQ)
     if (stake && commitmentsForAlloc.length > 0) {
       await exercise(registry, stake.templateId, stake.contractId, 'Archive', {})
       for (const c of commitmentsForAlloc) {
-        const shares = Math.round((num(c.createArgument.amount) / totalForAlloc) * stakeQty)
+        const shares = Math.round((cUsd(c) / totalForAlloc) * stakeQty)
         await create(registry, tid('ShareCertificate'), { registrar: registry, holder: c.createArgument.investor, instrument: EQ, shares: shares.toFixed(1) })
       }
     } else if (stake) {
       await exercise(registry, stake.templateId, stake.contractId, 'Transfer', { newHolder: buyer })
     }
-    res.json({ settled: true, atomic: true, settlementRef: ref, cbtcToFounder: totalForAlloc, equityToInvestor: stakeQty, proRata: commitmentsForAlloc.length })
+    res.json({ settled: true, atomic: true, settlementRef: ref, usdToFounder: totalForAlloc, equityToInvestor: stakeQty, proRata: commitmentsForAlloc.length })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
@@ -786,7 +809,8 @@ app.post('/deals/:dealId/reset-close', async (_req, res) => {
     for (const c of reg.filter((x) => entityOf(x.templateId) === 'Holding')) {
       await exercise(registry, c.templateId, c.contractId, 'Archive', {})
     }
-    await create(registry, tid('Holding'), { admin: registry, owner: buyer,  instrument: 'cBTC',          amount: '25.0' })
+    // Pre-close there is no cash leg — the USD capital leg is minted from commitments at settle.
+    void buyer
     await create(registry, tid('Holding'), { admin: registry, owner: seller, instrument: 'HALDEN-EQUITY', amount: '120000.0' })
     // Restore the pre-close cap table: drop the pro-rata investor allocations, give the founder back the 120k stake.
     for (const c of reg.filter((x) => entityOf(x.templateId) === 'ShareCertificate' && x.createArgument.instrument === 'HALDEN-EQUITY')) {
@@ -906,7 +930,7 @@ app.post('/deals', async (req, res) => {
     const dealTitle = String(title ?? '').trim() || 'Untitled raise'
     const inst = String(instrument ?? '').trim() || 'EQUITY'
     const target = Number(raiseTarget)
-    if (!(target > 0)) return res.status(400).json({ error: 'raiseTarget (cBTC) must be > 0' })
+    if (!(target > 0)) return res.status(400).json({ error: 'raiseTarget (USD) must be > 0' })
     const qty = Number(quantity) > 0 ? Number(quantity) : 120000
     const tierNames = Array.isArray(tiers)
       ? tiers.map((t: any) => String(t).trim()).filter(Boolean)
@@ -958,7 +982,7 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     const grantFor = (full: string) => acs.find((c) => entityOf(c.templateId) === 'AccessGrant' && c.createArgument.buyer === full)
 
     if (!has('Deal')) {
-      await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — 25 cBTC Series A', instrument: 'HALDEN-EQUITY', quantity: '120000.0', raiseTarget: '25.0', requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'], tiers: DEFAULT_TIERS })
+      await create(seller, tid('Deal'), { seller, dealId: DEAL_ID, title: 'Halden Robotics — $2.5M Series A', instrument: 'HALDEN-EQUITY', quantity: '120000.0', raiseTarget: '2500000.0', requiredApprovals: ['BOARD', 'LEGAL', 'COMPLIANCE'], tiers: DEFAULT_TIERS })
       did.push('Deal')
     }
     // contentHash MUST be the real vault hash (seedVault registered these blobs) so /verify
@@ -997,23 +1021,23 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     if (!has('Offer', (a) => a.buyer === boranic))   { await create(boranic,   tid('Offer'), { buyer: boranic,   seller, dealId: DEAL_ID, pricePerUnit: '0.1850', quantity: '120000.0', submittedAt: now }); did.push('Offer:Boranic') }
     if (!has('Offer', (a) => a.buyer === prometheus)) { await create(prometheus, tid('Offer'), { buyer: prometheus, seller, dealId: DEAL_ID, pricePerUnit: '0.1750', quantity: '120000.0', submittedAt: now }); did.push('Offer:Prometheus') }
 
-    // cBTC commitments: Boranic 8 + Meridian 12 = 20/25 cBTC seeded; Prometheus commits via UI
+    // Multi-asset commitments: Boranic 15 cBTC ($1.5M) + Meridian 200 cETH ($0.8M) = $2.3M/$2.5M
+    // seeded; Prometheus tops up in USDCx via the UI. usdValue is oracle-priced at commit time.
     const registry = await ensureParty('Registry')
     if (!has('Commitment', (a) => a.investor === boranic)) {
-      await createMulti([boranic, registry], tid('Commitment'), { admin: registry, investor: boranic, founder: seller, dealId: DEAL_ID, amount: '8.0000', committedAt: now })
+      await createMulti([boranic, registry], tid('Commitment'), { admin: registry, investor: boranic, founder: seller, dealId: DEAL_ID, asset: 'cBTC', amount: '15.0000', usdValue: usdOf('cBTC', 15).toFixed(4), committedAt: now })
       did.push('Commitment:Boranic')
     }
     if (!has('Commitment', (a) => a.investor === meridian)) {
-      await createMulti([meridian, registry], tid('Commitment'), { admin: registry, investor: meridian, founder: seller, dealId: DEAL_ID, amount: '12.0000', committedAt: now })
+      await createMulti([meridian, registry], tid('Commitment'), { admin: registry, investor: meridian, founder: seller, dealId: DEAL_ID, asset: 'cETH', amount: '200.0000', usdValue: usdOf('cETH', 200).toFixed(4), committedAt: now })
       did.push('Commitment:Meridian')
     }
-    // DvP legs: cBTC holding for the investor, equity holding for the founder
+    // DvP equity leg (founder). The USD capital leg is minted from commitments at settle time.
     const operator = await ensureParty('AtriumApp')
     const regAcs = await acsOf(registry)
     const hasHolding = (inst: string) => regAcs.some((c) => entityOf(c.templateId) === 'Holding' && c.createArgument.instrument === inst)
-    if (!hasHolding('cBTC'))          { await create(registry, tid('Holding'), { admin: registry, owner: meridian, instrument: 'cBTC',          amount: '25.0' }); did.push('Leg:cBTC') }
     if (!hasHolding('HALDEN-EQUITY')) { await create(registry, tid('Holding'), { admin: registry, owner: seller,   instrument: 'HALDEN-EQUITY', amount: '120000.0'  }); did.push('Leg:equity') }
-    if (!regAcs.some((c) => entityOf(c.templateId) === 'AllocationFactory')) { await create(registry, tid('AllocationFactory'), { admin: registry, users: [meridian, seller, operator] }); did.push('Factory') }
+    if (!regAcs.some((c) => entityOf(c.templateId) === 'AllocationFactory')) { await create(registry, tid('AllocationFactory'), { admin: registry, users: [boranic, meridian, prometheus, seller, operator] }); did.push('Factory') }
 
     // Cap table
     const founders = await ensureParty('Founders')

@@ -1,6 +1,6 @@
 -- Atrium.DealRoom
 --
--- The diligence + offer half of Atrium. The DESIGN (see docs/ASSESSMENT.md §4):
+-- The diligence + offer half of Atrium.:
 --   * Document  — signatory Seller only. Stable, private. Holds the hash + the pointer
 --                 into the OFF-CHAIN encrypted blob store. Never carries buyer observers.
 --   * AccessGrant — one per buyer per tier. Visible only to Seller + that Buyer.
@@ -27,8 +27,11 @@ template Commitment
     investor    : Party
     founder     : Party
     dealId      : Text
-    amount      : Decimal
+    amount      : Decimal   -- amount in the committed asset
     committedAt : Time
+    -- New fields, appended at the END + Optional so this is an SCU-valid upgrade of 0.7.0:
+    asset       : Optional Text     -- the CIP-56 asset: "USDCx" | "cBTC" | "cETH" (default cBTC)
+    usdValue    : Optional Decimal  -- USD value at commit time (oracle-priced); the raise is USD-denominated
   where
     signatory investor, admin
     observer founder
@@ -82,8 +85,10 @@ template Deal
         let approvedRoles = map (\a -> a.role) approvals
         _ <- mapA (\r -> assertMsg ("Missing approval from: " <> r) (elem r approvedRoles)) requiredApprovals
         commitments <- mapA fetch commitmentCids
-        let totalCommitted = foldl (\acc c -> acc + c.amount) 0.0 commitments
-        assertMsg ("Raise target " <> show raiseTarget <> " cBTC not met; committed: " <> show totalCommitted) (totalCommitted >= raiseTarget)
+        -- The raise is USD-denominated; sum the per-commitment USD value (oracle-priced at commit),
+        -- so mixed CIP-56 assets (USDCx / cBTC / cETH) aggregate cleanly against the target.
+        let totalCommitted = foldl (\acc c -> acc + optional c.amount identity c.usdValue) 0.0 commitments
+        assertMsg ("Raise target " <> show raiseTarget <> " USD not met; committed: " <> show totalCommitted) (totalCommitted >= raiseTarget)
         pure ()
 
 template Document
@@ -279,7 +284,7 @@ testConditionalClose = script do
   let dealId = "HALDEN-2026-A"
 
   dealCid   <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Series A", instrument = "HALDEN-EQUITY", quantity = 1000000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"], tiers = ["Teaser", "Financials", "Legal"])
-  commitCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, amount = 25.0, committedAt = now)
+  commitCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, asset = Some "USDCx", amount = 25.0, usdValue = Some 25.0, committedAt = now)
   offerCid  <- submit investor do createCmd (Offer with buyer = investor, seller, dealId, pricePerUnit = 25.0, quantity = 1000000.0, submittedAt = now)
   kycCid    <- submit kycp do createCmd (KYCAttestation with kycProvider = kycp, subject = investor, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
   boardApp  <- submit board do createCmd (Approval with approver = board, role = "BOARD",      dealId, approvedAt = now, founder = seller, envelopeId = "ATR-BOARD-TEST",      documentHash = "sha256:board")
@@ -289,8 +294,8 @@ testConditionalClose = script do
   -- MUST FAIL: only Board approved — LEGAL and COMPLIANCE still missing
   submitMustFail seller do exerciseCmd dealCid (Close with winnerOffer = offerCid, kycCid, approvalCids = [boardApp], commitmentCids = [commitCid])
 
-  -- MUST FAIL: all approvals present but only 10 cBTC committed; target is 25
-  lowCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, amount = 10.0, committedAt = now)
+  -- MUST FAIL: all approvals present but only $10 committed; target is $25
+  lowCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, asset = Some "USDCx", amount = 10.0, usdValue = Some 10.0, committedAt = now)
   submitMustFail seller do exerciseCmd dealCid (Close with winnerOffer = offerCid, kycCid, approvalCids = [boardApp, legalApp, kycApp], commitmentCids = [lowCid])
 
   -- SUCCEED: all 4 conditions green (KYC + 3 approvals + >=25 cBTC committed)
