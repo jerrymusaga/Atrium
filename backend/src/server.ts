@@ -8,7 +8,7 @@
 import './env.js'
 import express from 'express'
 import {
-  activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
+  activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, ledgerActivity, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
 import { decryptDocument, docMeta, loadVault, readDocument, recomputeHash, registerDocument, resolutionPdf, seedVault, tamperDocument } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
@@ -1049,6 +1049,12 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
 
     res.json({ seeded: did.length > 0, created: did, founder: displayName(seller), investors: [displayName(boranic), displayName(meridian), displayName(prometheus)], approvers: [displayName(board), displayName(legal), displayName(kycp)] })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Live ledger activity — every real Canton write (updateId + who + what), newest first, so the UI
+// can show judges transactions landing on-ledger in real time. Actor party ids mapped to labels.
+app.get('/activity', async (_req, res) => {
+  res.json(ledgerActivity().map((a) => ({ ...a, actor: labelFor(a.actor), at: a.at.slice(11, 19) })))
 })
 
 app.get('/health', async (_req, res) => {

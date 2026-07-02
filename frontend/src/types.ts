@@ -194,6 +194,9 @@ export type DistributionSummary = {
 }
 export type MyDistribution = { amount: number; shares: number; perShare: number; declaredAt: string }
 
+// A real Canton write, surfaced so judges watch transactions land on-ledger live.
+export type LedgerTxn = { updateId: string; summary: string; actor: string; at: string }
+
 export type CloseAttestation = {
   settled: boolean
   winningBuyerLabel: string | null

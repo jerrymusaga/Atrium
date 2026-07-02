@@ -58,6 +58,8 @@ export interface LedgerClient {
   // Post-close: founder declares a pro-rata cBTC distribution to the whole cap table — one
   // atomic transaction, each holder gets a private receipt. Requires a closed deal (treasury).
   distribute(viewer: PartyId, amount: number): Promise<void>
+  // Live Canton transaction feed — every real on-ledger write (updateId + who + what), newest first.
+  getActivity(): Promise<import('../types').LedgerTxn[]>
 }
 
 export type PartyId = string

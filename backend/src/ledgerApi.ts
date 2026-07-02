@@ -168,10 +168,23 @@ export function entityOf(templateId: string): string {
   return templateId.split(':').pop() ?? templateId
 }
 
+// --- ledger activity log — a live, in-memory record of every REAL Canton write (its updateId),
+// so the UI can show judges transactions landing on-ledger in real time. Newest first, capped. ---
+export type LedgerActivity = { updateId: string; summary: string; actor: string; at: string }
+const activityLog: LedgerActivity[] = []
+export function ledgerActivity(): LedgerActivity[] { return activityLog }
+function record(txResult: any, summary: string, actor: string) {
+  const t = txResult?.transaction
+  const updateId: string | undefined = t?.updateId ?? t?.transactionId
+  if (!updateId) return
+  activityLog.unshift({ updateId, summary, actor, at: new Date().toISOString() })
+  if (activityLog.length > 60) activityLog.length = 60
+}
+
 // --- command submission (each takes an optional connection) ---
 
 export async function exercise(actAs: string, templateId: string, contractId: string, choice: string, choiceArgument: Record<string, any>, conn: Conn = defaultConn): Promise<any> {
-  return api(conn, '/v2/commands/submit-and-wait-for-transaction', {
+  const r = await api<any>(conn, '/v2/commands/submit-and-wait-for-transaction', {
     commands: {
       userId: conn.userId,
       commandId: `atrium-${choice}-${Date.now()}`,
@@ -179,6 +192,8 @@ export async function exercise(actAs: string, templateId: string, contractId: st
       commands: [{ ExerciseCommand: { templateId, contractId, choice, choiceArgument } }],
     },
   })
+  record(r, `${choice} · ${entityOf(templateId)}`, actAs)
+  return r
 }
 
 export async function create(actAs: string, templateId: string, createArguments: Record<string, any>, conn: Conn = defaultConn): Promise<CreatedEvent> {
@@ -190,6 +205,7 @@ export async function create(actAs: string, templateId: string, createArguments:
       commands: [{ CreateCommand: { templateId, createArguments } }],
     },
   })
+  record(r, `create · ${entityOf(templateId)}`, actAs)
   return r.transaction.events[0].CreatedEvent as CreatedEvent
 }
 
@@ -203,5 +219,6 @@ export async function createMulti(actAs: string[], templateId: string, createArg
       commands: [{ CreateCommand: { templateId, createArguments } }],
     },
   })
+  record(r, `create · ${entityOf(templateId)}`, actAs[0])
   return r.transaction.events[0].CreatedEvent as CreatedEvent
 }

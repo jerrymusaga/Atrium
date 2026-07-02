@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AccessEvent, Asset, AssetTotal, AskResult, CapTableRow, CloseAttestation, ConditionItem, Deal, DealSetup, DealView, DistributionSummary, DocContent, Document, Holding, IntegrityReport, InvestorSummary, MyDistribution, Offer, Rates, ReadinessResult, Viewer } from '../types'
+import type { AccessEvent, Asset, AssetTotal, AskResult, CapTableRow, CloseAttestation, ConditionItem, Deal, DealSetup, DealView, DistributionSummary, DocContent, Document, Holding, IntegrityReport, InvestorSummary, LedgerTxn, MyDistribution, Offer, Rates, ReadinessResult, Viewer } from '../types'
 
 // ---------------------------------------------------------------------------
 // In-browser mock of the Atrium ledger — the full Capital Markets OS fundraise,
@@ -674,5 +674,20 @@ export const mockClient: LedgerClient = {
       declaredAt: new Date().toTimeString().slice(0, 5),
       recipients: rows.map((r) => ({ holderLabel: r.holderLabel, shares: r.shares, amount: Math.round(r.shares * perShare * 100) / 100 })),
     }
+  },
+
+  // Live ledger feed (mock): synthesized from state with pseudo update-ids. Real Canton update-ids
+  // in live mode. Newest first.
+  async getActivity(): Promise<LedgerTxn[]> {
+    await wait(60)
+    const id = (s: string) => '1220' + Array.from(s + 'x').reduce((h, c) => (h * 33 + c.charCodeAt(0)) >>> 0, 5381).toString(16).padStart(8, '0').repeat(6).slice(0, 60)
+    const out: LedgerTxn[] = []
+    investorParties().forEach((p, i) => out.push({ updateId: id('grant' + p), summary: 'create · AccessGrant', actor: 'Halden', at: `09:0${i + 1}:05` }))
+    accessTrail.forEach((e) => out.push({ updateId: id('acc' + e.buyer + e.docId), summary: 'RecordAccess · AccessGrant', actor: e.buyerLabel, at: `${e.accessedAt}:11` }))
+    Object.entries(commitments).forEach(([p, c]) => out.push({ updateId: id('com' + p + c.amount), summary: 'create · Commitment', actor: labelOf(p), at: `${c.committedAt}:20` }))
+    Object.values(approvals).forEach((a) => out.push({ updateId: id('app' + a.role), summary: 'create · Approval + Document', actor: a.role, at: `${a.approvedAt}:30` }))
+    if (settled) out.push({ updateId: id('settle'), summary: 'Settle · SettlementCoordinator (atomic)', actor: 'AtriumApp', at: '' })
+    if (distribution) out.push({ updateId: id('dist'), summary: 'Declare · DistributionPool', actor: 'Registry', at: `${distribution.declaredAt}:40` })
+    return out.reverse()
   },
 }

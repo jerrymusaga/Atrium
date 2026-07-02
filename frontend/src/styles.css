@@ -386,6 +386,17 @@ body {
 .asset-cBTC { border-color: rgba(198,138,62,.5); color: var(--seal); }
 .asset-cETH { border-color: rgba(94,143,181,.5); color: var(--steel); }
 
+/* ---- Live ledger activity feed ---- */
+.panel-activity { border-color: rgba(79,168,139,.35); }
+.txfeed { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; }
+.txrow { display: grid; grid-template-columns: 58px 92px 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12.5px; animation: txin .35s ease; }
+.txrow:first-child { border-top: none; }
+.tx-time { color: var(--muted); font-size: 11px; }
+.tx-actor { color: var(--text); font-weight: 500; }
+.tx-summary { color: var(--steel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-id { color: var(--settled); font-size: 11px; }
+@keyframes txin { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
 /* ---- Offers + close ---- */
 .chip { font-size: 11px; color: var(--muted); }
 .chip.settled { color: var(--settled); }

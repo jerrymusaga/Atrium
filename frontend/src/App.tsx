@@ -3,7 +3,7 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
-import type { Asset, AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LifecycleKind, ReadinessResult, Viewer } from './types'
+import type { Asset, AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LedgerTxn, LifecycleKind, ReadinessResult, Viewer } from './types'
 import { ASSETS } from './types'
 
 const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
@@ -83,6 +83,7 @@ export default function App() {
   const [tampering, setTampering] = useState<string | null>(null)
   const [distAmount, setDistAmount] = useState('500000')
   const [declaring, setDeclaring] = useState(false)
+  const [activity, setActivity] = useState<LedgerTxn[]>([])
   // Founder "set up the room" flow
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — $2.5M Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
@@ -113,8 +114,19 @@ export default function App() {
     const fresh = await client.getDealView(viewer)
     viewCache.current[viewer] = fresh
     setView(fresh)
+    if (invalidate) client.getActivity().then(setActivity).catch(() => {})
   }
   useEffect(() => { load() }, [viewer])
+
+  // Poll the live Canton transaction feed so judges watch txns land on-ledger in real time.
+  useEffect(() => {
+    if (!entered) return
+    let alive = true
+    const tick = () => client.getActivity().then((a) => { if (alive) setActivity(a) }).catch(() => {})
+    tick()
+    const h = setInterval(tick, 5000)
+    return () => { alive = false; clearInterval(h) }
+  }, [entered])
 
   const current = viewers.find((v) => v.party === viewer)
   const isApprover = current?.role === 'board' || current?.role === 'legal' || current?.role === 'compliance'
@@ -379,6 +391,26 @@ export default function App() {
         <header className="seeing">
           You are <strong>{current.label}</strong>. {viewerBlurb(current.role)}
         </header>
+
+        {/* ── Live Canton transaction feed — judges watch txns land on-ledger ── */}
+        {activity.length > 0 && (
+          <section className="panel panel-activity">
+            <div className="panel-head">
+              <h2>Ledger activity</h2>
+              <span className={`chip mono ${LIVE ? 'settled' : ''}`}>{LIVE ? '● live on Canton' : '○ simulated'} · {activity.length} txns</span>
+            </div>
+            <ul className="txfeed">
+              {activity.slice(0, 10).map((t, i) => (
+                <li key={t.updateId + i} className="txrow">
+                  <span className="tx-time mono">{t.at || 'close'}</span>
+                  <span className="tx-actor">{t.actor}</span>
+                  <span className="tx-summary mono">{t.summary}</span>
+                  <span className="tx-id mono" title={`updateId ${t.updateId}`}>{t.updateId.slice(0, 14)}…</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {/* ── Founder: set up the room (shown on a fresh ledger, before a deal exists) ── */}
         {noDeal && (
