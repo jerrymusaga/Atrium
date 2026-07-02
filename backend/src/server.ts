@@ -15,6 +15,30 @@ import { chat, veniceConfigured } from './venice.js'
 
 const app = express()
 app.use(express.json({ limit: '12mb' }))  // headroom for base64-encoded file uploads
+
+// CORS — let the hosted frontend (Vercel) call this backend. Set CORS_ORIGIN to your Vercel
+// origin(s), comma-separated, in production; defaults to '*' (safe here — no cookies/credentials).
+const CORS_ORIGINS = (process.env.CORS_ORIGIN ?? '*').split(',').map((s) => s.trim())
+app.use((req, res, next) => {
+  const origin = req.headers.origin ?? ''
+  res.setHeader('Access-Control-Allow-Origin', CORS_ORIGINS.includes('*') ? '*' : (CORS_ORIGINS.includes(origin) ? origin : CORS_ORIGINS[0]))
+  res.setHeader('Vary', 'Origin')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  if (req.method === 'OPTIONS') return res.sendStatus(204)
+  next()
+})
+
+// In-memory rate limiter — protects the Venice AI key on /ask from public spam (the real cost;
+// ledger txns are free devnet CC). ~12 asks/min/IP.
+const askHits = new Map<string, number[]>()
+function askRateLimited(ip: string): boolean {
+  const now = Date.now()
+  const hits = (askHits.get(ip) ?? []).filter((t) => now - t < 60_000)
+  hits.push(now)
+  askHits.set(ip, hits)
+  return hits.length > 12
+}
 loadVault()
 seedVault()
 
@@ -484,6 +508,8 @@ app.post('/deals/:dealId/distribute', async (req, res) => {
 const DOC_IDS = ['teaser', 'financials', 'cap-table']
 app.post('/deals/:dealId/ask', async (req, res) => {
   try {
+    const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? 'unknown').split(',')[0].trim()
+    if (askRateLimited(ip)) return res.status(429).json({ error: 'The diligence copilot is rate-limited — try again in a minute.' })
     await ensurePkg()
     const { party: prefix, question } = req.body ?? {}
     if (!prefix || !question) return res.status(400).json({ error: 'party and question required' })
