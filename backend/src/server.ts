@@ -935,8 +935,30 @@ app.post('/deals/:dealId/invite', async (req, res) => {
       const oneYear = new Date(Date.now() + 365 * 24 * 3600_000).toISOString()
       await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: buyer, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear })
     }
+    // If this grant fulfils a pending wallet request, clear it from the founder's queue.
+    if (buyerParty) { const i = accessRequests.findIndex((r) => r.party === buyer); if (i >= 0) accessRequests.splice(i, 1) }
     res.json({ invited: true, party: labelFor(buyer), tier: maxTier, external: Boolean(buyerParty) })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
+// --- wallet-based invitation: a real investor asks the founder for access using their own
+// Loop party id (public, non-secret). The founder then grants it on-ledger via /invite with
+// buyerParty = that real id — issuing a genuine AccessGrant to the investor's true identity.
+type AccessRequest = { party: string; name: string; at: string }
+const accessRequests: AccessRequest[] = []
+
+app.post('/deals/:dealId/request-access', async (req, res) => {
+  const party = String(req.body?.party ?? '').trim()
+  const name = String(req.body?.name ?? '').trim() || 'Loop wallet investor'
+  if (!party.includes('::')) return res.status(400).json({ error: 'a real Loop party id is required' })
+  const existing = accessRequests.find((r) => r.party === party)
+  if (existing) { existing.name = name; existing.at = new Date().toISOString() }
+  else accessRequests.unshift({ party, name, at: new Date().toISOString() })
+  res.json({ requested: true })
+})
+
+app.get('/deals/:dealId/access-requests', (_req, res) => {
+  res.json(accessRequests)
 })
 
 // Investor submits a sealed bid

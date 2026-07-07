@@ -332,6 +332,9 @@ export const mockClient: LedgerClient = {
   async getPayToParty() {
     return { party: 'Registry::mock', label: 'Atrium escrow · Registry (mock)' }
   },
+  async requestAccess(_party: string, _name: string) { void _party; void _name },
+  async listAccessRequests() { return [] as import('../types').AccessRequest[] },
+  async grantAccess(_viewer: PartyId, _party: string, _tier: number) { void _viewer; void _party; void _tier },
   async commit(viewer: PartyId, asset: Asset, amount: number, _payment?: import('../types').CommitPayment) {
     void _payment
     if (roleOf(viewer) !== 'buyer') throw new Error('Only an investor can commit')

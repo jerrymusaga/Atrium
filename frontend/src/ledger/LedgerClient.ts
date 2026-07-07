@@ -1,4 +1,4 @@
-import type { Asset, AskResult, CloseAttestation, CommitPayment, DealSetup, DealView, DocContent, DocFile, IntegrityReport, PayToParty, ReadinessResult, Viewer } from '../types'
+import type { AccessRequest, Asset, AskResult, CloseAttestation, CommitPayment, DealSetup, DealView, DocContent, DocFile, IntegrityReport, PayToParty, ReadinessResult, Viewer } from '../types'
 
 // The seam between UI and ledger. The mock implements this entirely in-browser.
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
@@ -32,6 +32,12 @@ export interface LedgerClient {
   commit(viewer: PartyId, asset: Asset, amount: number, payment?: CommitPayment): Promise<void>
   // The deal escrow party an investor's real token payment leg is sent to (Loop transfer recipient).
   getPayToParty(): Promise<PayToParty>
+  // A connected investor asks the founder for access using their real Loop party id.
+  requestAccess(party: string, name: string): Promise<void>
+  // Founder view: pending wallet access requests awaiting a grant.
+  listAccessRequests(): Promise<AccessRequest[]>
+  // Founder grants access on-ledger to a real Loop party (issues the AccessGrant to that id).
+  grantAccess(viewer: PartyId, party: string, tier: number): Promise<void>
   // Governance role (Board / Legal / Compliance) signs off: records the on-ledger Approval and
   // anchors a signed resolution PDF (hash on-ledger) — the modeled e-signature ceremony.
   approve(viewer: PartyId, role: string, sig?: { signedBy: string; envelopeId: string }): Promise<void>

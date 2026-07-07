@@ -87,6 +87,8 @@ export default function App() {
   const [declaring, setDeclaring] = useState(false)
   const [activity, setActivity] = useState<LedgerTxn[]>([])
   const [confirmNew, setConfirmNew] = useState(false)
+  const [accessReqs, setAccessReqs] = useState<import('./types').AccessRequest[]>([])
+  const [reqSent, setReqSent] = useState(false)
   // Founder "set up the room" flow
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — $2.5M Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
@@ -151,6 +153,39 @@ export default function App() {
     if (!isSeller) { setReadiness(null); return }
     client.getReadiness().then(setReadiness).catch(() => {})
   }, [view, isSeller])
+
+  // Founder polls for pending wallet access requests (self-onboarding investors).
+  useEffect(() => {
+    if (!isSeller || !LIVE) { setAccessReqs([]); return }
+    let alive = true
+    const tick = () => client.listAccessRequests().then((r) => { if (alive) setAccessReqs(r) }).catch(() => {})
+    tick()
+    const h = setInterval(tick, 6000)
+    return () => { alive = false; clearInterval(h) }
+  }, [isSeller])
+
+  // Connected investor asks the founder for access using their real Loop party id.
+  async function requestAccess() {
+    if (!wallet.partyId) return
+    setMsg(null)
+    try {
+      await client.requestAccess(wallet.partyId, wallet.email || walletShort)
+      setReqSent(true)
+      setMsg('Access requested — the founder can now grant your wallet on-ledger.')
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
+  // Founder grants a pending request on-ledger (issues the AccessGrant to the real party).
+  async function grantAccess(party: string, tier: number) {
+    setMsg(null)
+    try {
+      await client.grantAccess(viewer, party, tier)
+      setAccessReqs((rs) => rs.filter((r) => r.party !== party))
+      await refreshViewers()
+      await load(true)
+      setMsg(`Granted access on-ledger to ${party.slice(0, 14)}… at ${tierName(tier)}.`)
+    } catch (e) { setMsg((e as Error).message) }
+  }
 
   async function invite() {
     try {
@@ -365,7 +400,7 @@ export default function App() {
           </div>
         </div>
 
-        <WalletConnect />
+        <WalletConnect onRequestAccess={LIVE ? requestAccess : undefined} requested={reqSent} />
 
         {view?.deal && (
           <div className="deal-card">
@@ -424,6 +459,26 @@ export default function App() {
             <button className="btn wide" disabled={!inviteName.trim()} onClick={invite}>
               Grant up to “{tierName(inviteTier)}”
             </button>
+
+            {accessReqs.length > 0 && (
+              <div className="access-reqs">
+                <div className="eyebrow">Wallet access requests</div>
+                <ul className="access-list">
+                  {accessReqs.map((r) => (
+                    <li key={r.party} className="access-row">
+                      <div className="access-who">
+                        <span className="access-name">{r.name}</span>
+                        <span className="access-party mono" title={r.party}>{r.party.slice(0, 12)}…{r.party.slice(-6)}</span>
+                      </div>
+                      <button className="btn access-grant" onClick={() => grantAccess(r.party, inviteTier)}>
+                        Grant “{tierName(inviteTier)}”
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="lens-note">Grants a real on-ledger AccessGrant to the investor’s own Loop party at the tier selected above.</p>
+              </div>
+            )}
           </div>
         )}
       </aside>

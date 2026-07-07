@@ -202,6 +202,8 @@ export type PayToParty = { party: string; label: string }
 // Reference to a real CIP-56 token transfer the investor signed in their own Loop wallet,
 // anchoring the on-ledger Commitment to the genuine on-chain payment.
 export type CommitPayment = { updateId?: string; walletParty?: string; symbol?: string }
+// A self-onboarding investor asking the founder for access with their real Loop party id.
+export type AccessRequest = { party: string; name: string; at: string }
 
 export type CloseAttestation = {
   settled: boolean

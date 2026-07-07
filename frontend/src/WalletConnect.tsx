@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { initLoop, useLoopWallet } from './ledger/loopWallet'
 
 const short = (p: string) => (p.length > 22 ? `${p.slice(0, 10)}…${p.slice(-8)}` : p)
@@ -13,9 +13,16 @@ function fmtAmount(raw: string, decimals: number) {
 
 // Real Canton sign-in. Connecting proves the user's own external party and reads their
 // real on-chain holdings straight from the ledger — no backend, no mock.
-export default function WalletConnect() {
+export default function WalletConnect({ onRequestAccess, requested }: { onRequestAccess?: () => Promise<void>; requested?: boolean }) {
   const w = useLoopWallet()
+  const [requesting, setRequesting] = useState(false)
   useEffect(() => { initLoop() }, [])
+
+  async function request() {
+    if (!onRequestAccess) return
+    setRequesting(true)
+    try { await onRequestAccess() } finally { setRequesting(false) }
+  }
 
   if (w.status !== 'connected') {
     return (
@@ -68,6 +75,12 @@ export default function WalletConnect() {
       <p className="wallet-note">
         This is your real party. Your commit’s payment leg moves tokens from here.
       </p>
+
+      {onRequestAccess && (
+        <button className="btn wallet-request" onClick={request} disabled={requesting || requested}>
+          {requested ? '✓ Access requested' : requesting ? 'Requesting…' : 'Request access to this deal'}
+        </button>
+      )}
     </div>
   )
 }
