@@ -329,7 +329,11 @@ export const mockClient: LedgerClient = {
   },
 
   // Investor locks capital toward the USD-denominated raise, in any CIP-56 asset (USDCx/cBTC/cETH).
-  async commit(viewer: PartyId, asset: Asset, amount: number) {
+  async getPayToParty() {
+    return { party: 'Registry::mock', label: 'Atrium escrow · Registry (mock)' }
+  },
+  async commit(viewer: PartyId, asset: Asset, amount: number, _payment?: import('../types').CommitPayment) {
+    void _payment
     if (roleOf(viewer) !== 'buyer') throw new Error('Only an investor can commit')
     if (!(amount > 0)) throw new Error('Enter an amount')
     if (!RATES[asset]) throw new Error('Unsupported asset')

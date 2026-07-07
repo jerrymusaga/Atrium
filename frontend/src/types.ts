@@ -197,6 +197,12 @@ export type MyDistribution = { amount: number; shares: number; perShare: number;
 // A real Canton write, surfaced so judges watch transactions land on-ledger live.
 export type LedgerTxn = { updateId: string; summary: string; actor: string; at: string }
 
+// Where an investor's real token payment leg is sent (the deal escrow party).
+export type PayToParty = { party: string; label: string }
+// Reference to a real CIP-56 token transfer the investor signed in their own Loop wallet,
+// anchoring the on-ledger Commitment to the genuine on-chain payment.
+export type CommitPayment = { updateId?: string; walletParty?: string; symbol?: string }
+
 export type CloseAttestation = {
   settled: boolean
   winningBuyerLabel: string | null

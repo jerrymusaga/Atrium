@@ -134,6 +134,31 @@ export async function refreshHoldings() {
 // USDCx / cBTC / cETH straight from the user's wallet (provider.transfer / submitTransaction).
 export function getProvider(): LoopProvider | null { return provider }
 
+export type TransferResult = { updateId?: string; commandId?: string; status?: string; raw: unknown }
+
+// Move a real CIP-56 token from the connected wallet to `recipient`. This is the
+// investor's own signature on the money leg — the payment Atrium's Deal settles against.
+// `amount` is in display units (e.g. "15" cBTC); `instrument` is the exact InstrumentId
+// {admin,id} from the wallet's own holding, so we never hardcode a registry address.
+export async function transferToken(
+  recipient: string,
+  amount: string | number,
+  instrument: { admin: string; id: string },
+  memo?: string,
+): Promise<TransferResult> {
+  if (!provider) throw new Error('Connect your Loop wallet first.')
+  const res = (await provider.transfer(
+    recipient,
+    amount,
+    { instrument_admin: instrument.admin, instrument_id: instrument.id },
+    { executionMode: 'wait', message: memo ?? 'Atrium commitment', estimateTraffic: true },
+  )) as Record<string, unknown> | undefined
+  const r = (res ?? {}) as Record<string, any>
+  if (r.error) throw new Error(r.error?.error_message ?? 'Transfer was rejected by the ledger.')
+  void refreshHoldings()
+  return { updateId: r.update_id ?? r.updateId, commandId: r.command_id ?? r.commandId, status: r.status, raw: res }
+}
+
 // ── React binding ──────────────────────────────────────────────────────────
 function subscribe(cb: () => void) { listeners.add(cb); return () => { listeners.delete(cb) } }
 function getSnapshot() { return state }

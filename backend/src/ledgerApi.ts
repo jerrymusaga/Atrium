@@ -173,6 +173,15 @@ export function entityOf(templateId: string): string {
 export type LedgerActivity = { updateId: string; summary: string; actor: string; at: string }
 const activityLog: LedgerActivity[] = []
 export function ledgerActivity(): LedgerActivity[] { return activityLog }
+
+// Surface a real transaction that was submitted OUTSIDE the executor — e.g. an investor's
+// CIP-56 token transfer signed in their own Loop wallet. The updateId is a genuine Canton
+// update id; we just want it in the same live feed so everyone watches the payment land.
+export function recordExternal(updateId: string, summary: string, actor: string) {
+  if (!updateId) return
+  activityLog.unshift({ updateId, summary, actor, at: new Date().toISOString() })
+  if (activityLog.length > 60) activityLog.length = 60
+}
 function record(txResult: any, summary: string, actor: string) {
   const t = txResult?.transaction
   const updateId: string | undefined = t?.updateId ?? t?.transactionId

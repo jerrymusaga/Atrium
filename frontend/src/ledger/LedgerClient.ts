@@ -1,4 +1,4 @@
-import type { Asset, AskResult, CloseAttestation, DealSetup, DealView, DocContent, DocFile, IntegrityReport, ReadinessResult, Viewer } from '../types'
+import type { Asset, AskResult, CloseAttestation, CommitPayment, DealSetup, DealView, DocContent, DocFile, IntegrityReport, PayToParty, ReadinessResult, Viewer } from '../types'
 
 // The seam between UI and ledger. The mock implements this entirely in-browser.
 // In Stage 3, implement this same interface against the Canton JSON Ledger API
@@ -27,7 +27,11 @@ export interface LedgerClient {
   submitOffer(viewer: PartyId, pricePerUnit: number): Promise<void>
   // Investor locks capital toward the USD-denominated raise, in any CIP-56 asset
   // (USDCx / cBTC / cETH) — creates an on-ledger Commitment valued in USD via the oracle.
-  commit(viewer: PartyId, asset: Asset, amount: number): Promise<void>
+  // `payment` anchors the Commitment to a real token transfer the investor signed in their
+  // own Loop wallet (the money leg), when one was made.
+  commit(viewer: PartyId, asset: Asset, amount: number, payment?: CommitPayment): Promise<void>
+  // The deal escrow party an investor's real token payment leg is sent to (Loop transfer recipient).
+  getPayToParty(): Promise<PayToParty>
   // Governance role (Board / Legal / Compliance) signs off: records the on-ledger Approval and
   // anchors a signed resolution PDF (hash on-ledger) — the modeled e-signature ceremony.
   approve(viewer: PartyId, role: string, sig?: { signedBy: string; envelopeId: string }): Promise<void>

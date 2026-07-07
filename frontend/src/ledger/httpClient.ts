@@ -1,5 +1,5 @@
 import type { LedgerClient, PartyId } from './LedgerClient'
-import type { AskResult, CloseAttestation, DealSetup, DealView, DocContent, IntegrityReport, LedgerTxn, ReadinessResult, Viewer } from '../types'
+import type { AskResult, CloseAttestation, CommitPayment, DealSetup, DealView, DocContent, IntegrityReport, LedgerTxn, PayToParty, ReadinessResult, Viewer } from '../types'
 
 // Live client — talks to the Atrium executor (backend/), which in turn drives the real
 // Canton JSON Ledger API. Selective disclosure, RecordAccess, Accept and the atomic close
@@ -41,8 +41,11 @@ export const httpClient: LedgerClient = {
   async submitOffer(viewer: PartyId, pricePerUnit: number) {
     await post(`/deals/${DEAL}/offer`, { party: viewer, pricePerUnit })
   },
-  async commit(viewer: PartyId, asset: string, amount: number) {
-    await post(`/deals/${DEAL}/commit`, { party: viewer, asset, amount })
+  async commit(viewer: PartyId, asset: string, amount: number, payment?: CommitPayment) {
+    await post(`/deals/${DEAL}/commit`, { party: viewer, asset, amount, payment })
+  },
+  async getPayToParty(): Promise<PayToParty> {
+    return j<PayToParty>(`/deals/${DEAL}/paytoparty`)
   },
   async approve(viewer: PartyId, role: string, sig?: { signedBy: string; envelopeId: string }) {
     await post(`/deals/${DEAL}/approve`, { party: viewer, role, signedBy: sig?.signedBy, envelopeId: sig?.envelopeId })

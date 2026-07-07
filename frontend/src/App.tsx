@@ -4,7 +4,7 @@ import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
 import WalletConnect from './WalletConnect'
-import { useLoopWallet } from './ledger/loopWallet'
+import { useLoopWallet, transferToken } from './ledger/loopWallet'
 import type { Asset, AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LedgerTxn, LifecycleKind, ReadinessResult, Viewer } from './types'
 import { ASSETS } from './types'
 
@@ -190,11 +190,33 @@ export default function App() {
     setCommitting(true)
     setMsg(null)
     try {
-      await client.commit(viewer, commitAsset, amt)
+      let payment: import('./types').CommitPayment | undefined
+      let walletNote = ''
+      // Real money leg: if a Loop wallet is connected and holds the asset, the investor
+      // signs a genuine CIP-56 token transfer to the deal escrow — the payment Atrium
+      // settles against. (Live backend only: mock has no real escrow party to receive it.)
+      if (LIVE && wallet.status === 'connected' && walletBalance) {
+        const avail = Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0)
+        if (amt > avail) {
+          setMsg(`Your Loop wallet holds ${avail.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${commitAsset} — reduce the amount or top up.`)
+          setCommitting(false); return
+        }
+        try {
+          const payTo = await client.getPayToParty()
+          setMsg('Approve the transfer in your Loop wallet…')
+          const r = await transferToken(payTo.party, commitAmt, { admin: walletBalance.admin, id: walletBalance.id }, `Atrium — ${view?.deal?.title ?? 'commitment'}`)
+          payment = { updateId: r.updateId, walletParty: wallet.partyId ?? undefined, symbol: commitAsset }
+        } catch (e) {
+          walletNote = `Wallet transfer didn’t complete (${(e as Error).message}); recorded as a modeled commitment. `
+        }
+      }
+      await client.commit(viewer, commitAsset, amt, payment)
       setCommitAmt('')
       await load(true)
       const usd = amt * (view?.rates?.[commitAsset] ?? 0)
-      setMsg(`Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) on-ledger — the founder sees your commitment toward the raise target.`)
+      setMsg(payment?.updateId
+        ? `${walletNote}Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) — real transfer signed in your Loop wallet · updateId ${payment.updateId.slice(0, 16)}…`
+        : `${walletNote}Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) on-ledger — the founder sees your commitment toward the raise target.`)
     } catch (e) { setMsg((e as Error).message) } finally { setCommitting(false) }
   }
 

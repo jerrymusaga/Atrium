@@ -8,7 +8,7 @@
 import './env.js'
 import express from 'express'
 import {
-  activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, ledgerActivity, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
+  activeContracts, allocatePartyByHint, create, createMulti, defaultConn, entityOf, exercise, grantActAs, ledgerActivity, recordExternal, listParties, makeConn, USER_ID, type Conn, type CreatedEvent,
 } from './ledgerApi.js'
 import { decryptDocument, docMeta, loadVault, readDocument, recomputeHash, registerDocument, resolutionPdf, seedVault, tamperDocument } from './vault.js'
 import { chat, veniceConfigured } from './venice.js'
@@ -545,10 +545,21 @@ ${context || '(none — this party has no document access)'}`
 // --- investor commits capital (USDCx / cBTC / cETH) toward the USD-denominated raise ---
 // The Commitment records the asset + amount + its USD value (oracle-priced); the Deal.Close gate
 // sums usdValue against the target, so mixed CIP-56 assets aggregate cleanly.
+// Where an investor's real token payment leg is sent: the Registry party acts as the
+// deal escrow (holds capital until the atomic close swaps it to the founder). The
+// frontend hands this to the Loop wallet as the transfer recipient.
+app.get('/deals/:dealId/paytoparty', async (_req, res) => {
+  try {
+    await ensurePkg()
+    const registry = await partyId('Registry')
+    res.json({ party: registry, label: 'Atrium escrow · Registry' })
+  } catch (e) { res.status(500).json({ error: (e as Error).message }) }
+})
+
 app.post('/deals/:dealId/commit', async (req, res) => {
   try {
     await ensurePkg()
-    const { party: prefix, asset, amount } = req.body ?? {}
+    const { party: prefix, asset, amount, payment } = req.body ?? {}
     if (!prefix) return res.status(400).json({ error: 'party required' })
     const amt = Number(amount)
     if (!(amt > 0)) return res.status(400).json({ error: 'amount must be > 0' })
@@ -560,7 +571,12 @@ app.post('/deals/:dealId/commit', async (req, res) => {
     const admin    = await partyId('Registry')
     const now = new Date().toISOString()
     await createMulti([investor, admin], tid('Commitment'), { admin, investor, founder, dealId: DEAL_ID, asset: a, amount: amt.toFixed(4), usdValue: usdValue.toFixed(4), committedAt: now })
-    res.json({ committed: true, asset: a, amount: amt, usdValue })
+    // If the investor paid this leg for real from their own Loop wallet (CIP-56 token
+    // transfer they signed), surface that genuine on-chain payment in the live feed.
+    if (payment?.updateId) {
+      recordExternal(String(payment.updateId), `real transfer · ${amt} ${a} → escrow (Loop wallet)`, payment.walletParty ? String(payment.walletParty) : prefix)
+    }
+    res.json({ committed: true, asset: a, amount: amt, usdValue, payment: payment?.updateId ?? null })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
