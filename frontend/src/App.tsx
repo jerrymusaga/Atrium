@@ -84,6 +84,7 @@ export default function App() {
   const [distAmount, setDistAmount] = useState('500000')
   const [declaring, setDeclaring] = useState(false)
   const [activity, setActivity] = useState<LedgerTxn[]>([])
+  const [confirmNew, setConfirmNew] = useState(false)
   // Founder "set up the room" flow
   const [setupTitle, setSetupTitle] = useState('Halden Robotics — $2.5M Series A')
   const [setupInstrument, setSetupInstrument] = useState('HALDEN-EQUITY')
@@ -256,7 +257,7 @@ export default function App() {
   }
 
   async function startNewDeal() {
-    if (!confirm('Start a new deal? This clears the current round so you can set one up from scratch.')) return
+    setConfirmNew(false)
     setMsg(null)
     try {
       await client.startNewDeal(viewer)
@@ -337,7 +338,7 @@ export default function App() {
               <div><dt>Deal ref</dt><dd className="mono">{view.deal.dealId}</dd></div>
             </dl>
             {isSeller && !view.settled && (
-              <button className="deal-new" onClick={startNewDeal}>⟲ Start a new deal</button>
+              <button className="deal-new" onClick={() => setConfirmNew(true)}>⟲ Start a new deal</button>
             )}
           </div>
         )}
@@ -1174,6 +1175,20 @@ export default function App() {
               <div className="doc-modal-foot mono">
                 Signing generates a PDF resolution, encrypts it in the data room, anchors its hash on Canton,
                 and creates the on-ledger Approval the conditional close verifies.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Confirm: start a new deal (in-app, replaces the native alert) ── */}
+        {confirmNew && (
+          <div className="doc-modal-backdrop" onClick={() => setConfirmNew(false)}>
+            <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Start a new deal?</h3>
+              <p>This clears the current round so you can set one up from scratch — tiers, raise target, stake, and investors.</p>
+              <div className="confirm-actions">
+                <button className="btn ghost" onClick={() => setConfirmNew(false)}>Cancel</button>
+                <button className="btn solid" onClick={startNewDeal}>⟲ Start a new deal</button>
               </div>
             </div>
           </div>

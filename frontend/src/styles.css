@@ -594,6 +594,10 @@ body {
 .setup-hint { text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 10.5px; }
 .deal-new { margin-top: 14px; width: 100%; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 9px; padding: 7px 10px; font-size: 12px; cursor: pointer; transition: color .15s, border-color .15s; }
 .deal-new:hover { color: var(--text); border-color: var(--steel-dim); }
+.confirm-modal { background: var(--slate); border: 1px solid var(--steel-dim); border-radius: 14px; max-width: 400px; width: 100%; padding: 22px; box-shadow: 0 24px 64px rgba(0,0,0,.5); }
+.confirm-modal h3 { font-family: var(--display); font-weight: 600; font-size: 18px; margin: 0 0 8px; }
+.confirm-modal p { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 18px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .setup-tiers { display: grid; gap: 8px; margin-bottom: 18px; }
 .setup-tier-row { display: flex; align-items: center; gap: 8px; }
 .setup-tier-row .field { flex: 1; }
