@@ -1093,7 +1093,16 @@ app.get('/health', async (_req, res) => {
       parties: parties.length,
       remoteIdentity: REMOTE ? { label: REMOTE.label, validator: REMOTE.conn.baseUrl } : null,
     })
-  } catch (e) { res.status(503).json({ ok: false, error: (e as Error).message }) }
+  } catch (e) {
+    // Surface config on failure so a misconfigured deploy is diagnosable (all non-secret).
+    res.status(503).json({
+      ok: false,
+      error: (e as Error).message,
+      ledgerApi: process.env.LEDGER_API_URL ?? 'http://localhost:7575 (DEFAULT — LEDGER_API_URL not set!)',
+      oidcConfigured: Boolean(process.env.OIDC_TOKEN_URL || process.env.OIDC_ISSUER),
+      pkg: process.env.ATRIUM_PKG ? 'set' : '(ATRIUM_PKG not set)',
+    })
+  }
 })
 
 const PORT = Number(process.env.PORT ?? 8080)
