@@ -3,6 +3,8 @@ import { mockClient } from './ledger/mockClient'
 import { httpClient } from './ledger/httpClient'
 import { AtriumMark } from './AtriumMark'
 import { Landing } from './Landing'
+import WalletConnect from './WalletConnect'
+import { useLoopWallet } from './ledger/loopWallet'
 import type { Asset, AskResult, CloseAttestation, DealView, DistributionSummary, DocContent, IntegrityReport, LedgerTxn, LifecycleKind, ReadinessResult, Viewer } from './types'
 import { ASSETS } from './types'
 
@@ -93,6 +95,11 @@ export default function App() {
   const [setupTiers, setSetupTiers] = useState<string[]>([...DEMO_TIERS])
   const [creatingDeal, setCreatingDeal] = useState(false)
   const [loadingDemo, setLoadingDemo] = useState(false)
+
+  const wallet = useLoopWallet()
+  const walletShort = wallet.partyId ? `${wallet.partyId.slice(0, 10)}…${wallet.partyId.slice(-6)}` : ''
+  // Balance of the currently-selected commit asset in the connected wallet, if held.
+  const walletBalance = wallet.holdings.find((h) => h.symbol === commitAsset || h.id === commitAsset)
 
   const viewCache = useRef<Record<string, DealView>>({})
 
@@ -326,6 +333,8 @@ export default function App() {
             <div className="brand-sub">private capital markets OS</div>
           </div>
         </div>
+
+        <WalletConnect />
 
         {view?.deal && (
           <div className="deal-card">
@@ -796,6 +805,18 @@ export default function App() {
                 {Number(commitAmt) > 0 && view?.rates && (
                   <p className="panel-note commit-usd mono">
                     = {fmtUsd(Number(commitAmt) * (view.rates[commitAsset] ?? 0))} @ oracle {fmtUsd(view.rates[commitAsset] ?? 0)}/{commitAsset}
+                  </p>
+                )}
+                {wallet.status === 'connected' ? (
+                  <p className="panel-note commit-wallet">
+                    <span className="wallet-dot" /> Paying from your Loop wallet <span className="mono">{walletShort}</span>
+                    {walletBalance
+                      ? <> · {commitAsset} on hand: <span className="mono">{(Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0)).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span></>
+                      : <> · no {commitAsset} in this wallet yet</>}
+                  </p>
+                ) : (
+                  <p className="panel-note commit-wallet-idle">
+                    Connect your <strong>Loop wallet</strong> (left) to pay this leg from your own Canton party.
                   </p>
                 )}
                 <p className="panel-note">

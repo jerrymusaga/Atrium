@@ -609,3 +609,30 @@ body {
 .setup-or { color: var(--muted); font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
 .setup-demo-note { margin-top: 12px; }
 @media (max-width: 720px) { .setup-grid { grid-template-columns: 1fr; } .setup-actions { flex-direction: column; align-items: stretch; } }
+
+/* ---- Loop wallet sign-in (rail) ---- */
+.wallet { border-top: 1px solid var(--line); padding-top: 22px; margin-top: 22px; }
+.wallet-note { color: var(--muted); font-size: 11.5px; line-height: 1.5; margin: 10px 0 0; }
+.wallet-err { color: var(--seal); font-size: 11.5px; line-height: 1.5; margin: 8px 0 0; }
+.wallet-connect { width: 100%; padding: 12px; background: linear-gradient(180deg, rgba(94,143,181,.16), rgba(94,143,181,.06)); border-color: var(--steel-dim); font-weight: 600; }
+.wallet-connect:hover { border-color: var(--steel); }
+.wallet-connect:disabled { opacity: .6; cursor: progress; }
+.wallet-on { }
+.wallet-head { display: flex; align-items: center; justify-content: space-between; }
+.wallet-disc { background: none; border: none; color: var(--muted); font-size: 11px; cursor: pointer; padding: 0; }
+.wallet-disc:hover { color: var(--seal); }
+.wallet-id { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); margin: 4px 0 2px; }
+.wallet-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--settled); box-shadow: 0 0 8px var(--settled); flex: 0 0 auto; }
+.wallet-email { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.wallet-holdings { margin-top: 14px; }
+.wallet-holdings-head { display: flex; align-items: center; justify-content: space-between; }
+.wallet-refresh { background: none; border: none; color: var(--steel); font-size: 13px; cursor: pointer; padding: 0 2px; }
+.wallet-refresh:disabled { opacity: .5; cursor: progress; }
+.wallet-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 7px; }
+.wallet-row { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 8px; font-size: 12px; }
+.wallet-sym { font-weight: 600; color: var(--text); }
+.wallet-org { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wallet-bal { color: var(--settled); font-size: 12px; }
+.commit-wallet { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--text); }
+.commit-wallet .wallet-dot { display: inline-block; }
+.commit-wallet-idle { color: var(--muted); }
