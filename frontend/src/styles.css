@@ -636,3 +636,5 @@ body {
 .commit-wallet { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--text); }
 .commit-wallet .wallet-dot { display: inline-block; }
 .commit-wallet-idle { color: var(--muted); }
+.commit-wallet-warn { color: var(--seal); }
+.commit-wallet-warn .wallet-dot { background: var(--seal); box-shadow: 0 0 8px var(--seal); }

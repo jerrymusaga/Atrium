@@ -100,6 +100,13 @@ export default function App() {
   const walletShort = wallet.partyId ? `${wallet.partyId.slice(0, 10)}…${wallet.partyId.slice(-6)}` : ''
   // Balance of the currently-selected commit asset in the connected wallet, if held.
   const walletBalance = wallet.holdings.find((h) => h.symbol === commitAsset || h.id === commitAsset)
+  const walletAvail = walletBalance ? Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0) : 0
+  // Live commits must be wallet-backed (real payment). Compute why a commit is blocked.
+  const liveCommitBlock: string | null = !LIVE ? null
+    : wallet.status !== 'connected' ? 'connect'
+    : !walletBalance ? 'no-asset'
+    : Number(commitAmt) > walletAvail ? 'insufficient'
+    : null
 
   const viewCache = useRef<Record<string, DealView>>({})
 
@@ -191,33 +198,35 @@ export default function App() {
     setMsg(null)
     try {
       let payment: import('./types').CommitPayment | undefined
-      let walletNote = ''
-      // Real money leg: if a Loop wallet is connected and holds the asset, the investor
-      // signs a genuine CIP-56 token transfer to the deal escrow — the payment Atrium
-      // settles against. (Live backend only: mock has no real escrow party to receive it.)
-      if (LIVE && wallet.status === 'connected' && walletBalance) {
-        const avail = Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0)
-        if (amt > avail) {
-          setMsg(`Your Loop wallet holds ${avail.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${commitAsset} — reduce the amount or top up.`)
+      // Everything real: on the live ledger a commitment MUST be backed by a genuine
+      // CIP-56 token transfer the investor signs in their own Loop wallet — no wallet,
+      // no balance, or a declined signature means no commit (no modeled fallback).
+      if (LIVE) {
+        if (wallet.status !== 'connected') {
+          setMsg('Connect your Loop wallet (left) to invest — commitments settle on-chain.')
           setCommitting(false); return
         }
-        try {
-          const payTo = await client.getPayToParty()
-          setMsg('Approve the transfer in your Loop wallet…')
-          const r = await transferToken(payTo.party, commitAmt, { admin: walletBalance.admin, id: walletBalance.id }, `Atrium — ${view?.deal?.title ?? 'commitment'}`)
-          payment = { updateId: r.updateId, walletParty: wallet.partyId ?? undefined, symbol: commitAsset }
-        } catch (e) {
-          walletNote = `Wallet transfer didn’t complete (${(e as Error).message}); recorded as a modeled commitment. `
+        if (!walletBalance) {
+          setMsg(`Your Loop wallet holds no ${commitAsset}. Choose an asset you hold, or top up.`)
+          setCommitting(false); return
         }
+        if (amt > walletAvail) {
+          setMsg(`Your Loop wallet holds ${walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${commitAsset} — reduce the amount or top up.`)
+          setCommitting(false); return
+        }
+        const payTo = await client.getPayToParty()
+        setMsg('Approve the transfer in your Loop wallet…')
+        const r = await transferToken(payTo.party, commitAmt, { admin: walletBalance.admin, id: walletBalance.id }, `Atrium — ${view?.deal?.title ?? 'commitment'}`)
+        payment = { updateId: r.updateId, walletParty: wallet.partyId ?? undefined, symbol: commitAsset }
       }
       await client.commit(viewer, commitAsset, amt, payment)
       setCommitAmt('')
       await load(true)
       const usd = amt * (view?.rates?.[commitAsset] ?? 0)
       setMsg(payment?.updateId
-        ? `${walletNote}Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) — real transfer signed in your Loop wallet · updateId ${payment.updateId.slice(0, 16)}…`
-        : `${walletNote}Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) on-ledger — the founder sees your commitment toward the raise target.`)
-    } catch (e) { setMsg((e as Error).message) } finally { setCommitting(false) }
+        ? `Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) — real transfer signed in your Loop wallet · updateId ${payment.updateId.slice(0, 16)}…`
+        : `Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) on-ledger — the founder sees your commitment toward the raise target.`)
+    } catch (e) { setMsg(`Commit not recorded — ${(e as Error).message}`) } finally { setCommitting(false) }
   }
 
   async function signAndApprove() {
@@ -820,7 +829,7 @@ export default function App() {
                     onChange={(e) => setCommitAmt(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commit() }}
                   />
-                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commit}>
+                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0) || !!liveCommitBlock} onClick={commit}>
                     {committing ? 'Locking…' : 'Commit'}
                   </button>
                 </div>
@@ -830,15 +839,17 @@ export default function App() {
                   </p>
                 )}
                 {wallet.status === 'connected' ? (
-                  <p className="panel-note commit-wallet">
+                  <p className={`panel-note commit-wallet ${liveCommitBlock ? 'commit-wallet-warn' : ''}`}>
                     <span className="wallet-dot" /> Paying from your Loop wallet <span className="mono">{walletShort}</span>
                     {walletBalance
-                      ? <> · {commitAsset} on hand: <span className="mono">{(Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0)).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span></>
-                      : <> · no {commitAsset} in this wallet yet</>}
+                      ? <> · {commitAsset} on hand: <span className="mono">{walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>{liveCommitBlock === 'insufficient' && <> — not enough for this commit</>}</>
+                      : <> · no {commitAsset} in this wallet {LIVE ? '— pick an asset you hold' : 'yet'}</>}
                   </p>
                 ) : (
-                  <p className="panel-note commit-wallet-idle">
-                    Connect your <strong>Loop wallet</strong> (left) to pay this leg from your own Canton party.
+                  <p className={`panel-note ${LIVE ? 'commit-wallet-warn' : 'commit-wallet-idle'}`}>
+                    {LIVE
+                      ? <><strong>Connect your Loop wallet</strong> (left) to invest — every commitment settles as a real on-chain token transfer you sign.</>
+                      : <>Connect your <strong>Loop wallet</strong> (left) to pay this leg from your own Canton party.</>}
                   </p>
                 )}
                 <p className="panel-note">
