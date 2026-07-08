@@ -6,8 +6,8 @@
 --   * AccessGrant — one per buyer per tier. Visible only to Seller + that Buyer.
 --   * AccessEvent — append-only, immutable "who saw what, when". The differentiator.
 --   * Offer — buyer's bid, visible only to Seller.
---   * Commitment — investor's locked cBTC toward the raise (co-signed by admin/registry).
---   * Approval — board/legal/compliance sign-off on the close (on-ledger, unforgeable).
+--   * Commitment — investor's locked capital toward the raise (registry-issued record).
+--   * Approval — board/legal/compliance sign-off on the close (on-ledger).
 --   * Deal.Close — the conditional close gate: all 4 conditions must be green or the
 --                  choice aborts. Nonconsuming so the demo is re-runnable.
 
@@ -31,8 +31,7 @@ template Commitment
     dealId      : Text
     amount      : Decimal   -- amount in the committed asset
     committedAt : Time
-    -- New fields, appended at the END + Optional so this is an SCU-valid upgrade of 0.7.0:
-    asset       : Optional Text     -- the CIP-56 asset: "USDCx" | "cBTC" | "cETH" (default cBTC)
+    asset       : Optional Text     -- the CIP-56 asset: "USDCx" | "cBTC" | "cETH"
     usdValue    : Optional Decimal  -- USD value at commit time (oracle-priced); the raise is USD-denominated
   where
     signatory admin
@@ -47,7 +46,7 @@ template Approval
     dealId       : Text
     approvedAt   : Time
     founder      : Party
-    envelopeId   : Text   -- the e-signature envelope reference (modeled DocuSign)
+    envelopeId   : Text   -- the e-signature envelope reference
     documentHash : Text   -- hash of the signed resolution PDF anchored in the data room
   where
     signatory approver

@@ -1,9 +1,7 @@
 -- Atrium.Dvp
 --
--- The atomic Delivery-vs-Payment close, as MOCK templates that mirror the shape of
--- the Splice Token Standard (CIP-56). Self-contained so it builds and runs in Daml
--- Script without the real token-standard packages. Stage 3 swaps these for the real
--- interfaces and fetches choice contexts from the token registries (see docs/ASSESSMENT.md §4).
+-- The atomic Delivery-vs-Payment close. These templates mirror the shape of the Splice
+-- Token Standard (CIP-56) and are self-contained so the model builds and runs on its own:
 --
 --   Holding            -> Splice.Api.Token.HoldingV1.Holding
 --   AllocationFactory  -> Splice.Api.Token.AllocationInstructionV1.AllocationFactory

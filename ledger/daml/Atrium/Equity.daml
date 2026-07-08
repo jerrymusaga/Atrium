@@ -3,8 +3,7 @@
 -- The tokenized ownership leg + the share registry (cap table). A `ShareCertificate` is a
 -- position on the cap table, issued by the company's registrar (transfer agent). The secondary
 -- sale transfers the on-offer stake to the buyer at the close — so the cap table reflects the
--- new owner the instant the deal settles. This is the RWA half: real tokenized ownership, not a
--- mock number. In Stage 3 the cash leg becomes Amulet; this stays the bespoke delivery leg.
+-- new owner the instant the deal settles.
 
 module Atrium.Equity where
 
