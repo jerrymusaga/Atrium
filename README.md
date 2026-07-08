@@ -15,7 +15,7 @@ Atrium is deployed and running on a real Canton validator — not LocalNet, not 
 | **App** | https://atrium-omega.vercel.app  (green "● LIVE on Canton" pill) |
 | **Backend / executor** | https://atrium-production-4de8.up.railway.app/health → `{ ok: true, … }` |
 | **Validator** | FiveNorth **Seaport** devnet, Encode org — `ledger-api.validator.devnet.sandbox.fivenorth.io` |
-| **Daml package** | `atrium-cm` 0.9.0, deployed via Seaport's GitHub build (SDK 3.4.11) |
+| **Daml package** | `atrium-cm` on that validator — 0.9.0 uploaded via Seaport's GitHub build (SDK 3.4.11); the live executor runs the stable 0.8.0 it was verified on (`/health` shows the active id) |
 
 `/health` reports the live validator endpoint and the active package id; the in-app **ledger-activity
 feed** shows real on-ledger transactions (Canton `updateId`s) as they land. Every write in the live app —
