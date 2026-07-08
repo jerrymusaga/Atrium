@@ -1,4 +1,4 @@
-sdk-version: 3.5.2
+sdk-version: 3.4.11
 name: atrium-cm
 version: 0.9.0
 source: daml
