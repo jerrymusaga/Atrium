@@ -44,6 +44,11 @@ seedVault()
 
 const SELLER = 'Halden'
 const DEAL_ID = 'HALDEN-2026-A'
+// Stage-3: when the registry-issued Commitment (0.9.0, signatory = admin only) is deployed,
+// set ATRIUM_STAGE3=1 so the executor can record commitments for real external Loop parties
+// (their authorization is the wallet-signed token transfer, not a co-signature). Default off
+// keeps the live 0.8.0 behaviour (Commitment co-signed by investor + admin) unchanged.
+const STAGE3 = process.env.ATRIUM_STAGE3 === '1'
 const DEFAULT_TIERS = ['Teaser', 'Financials', 'Legal']
 const tierLabelOf = (tiers: string[], tier: number) => tiers[tier - 1] ?? `Tier ${tier}`
 
@@ -566,11 +571,19 @@ app.post('/deals/:dealId/commit', async (req, res) => {
     const a = String(asset ?? 'cBTC')
     if (!RATES[a]) return res.status(400).json({ error: `unsupported asset ${a} (USDCx / cBTC / cETH)` })
     const usdValue = usdOf(a, amt)
-    const investor = await partyId(prefix)
+    // A real external Loop party arrives as a full party id (contains '::'); a persona as a logical name.
+    const investor = prefix.includes('::') ? prefix : await partyId(prefix)
     const founder  = await partyId(SELLER)
     const admin    = await partyId('Registry')
     const now = new Date().toISOString()
-    await createMulti([investor, admin], tid('Commitment'), { admin, investor, founder, dealId: DEAL_ID, asset: a, amount: amt.toFixed(4), usdValue: usdValue.toFixed(4), committedAt: now })
+    const commitArgs = { admin, investor, founder, dealId: DEAL_ID, asset: a, amount: amt.toFixed(4), usdValue: usdValue.toFixed(4), committedAt: now }
+    if (STAGE3) {
+      // Registry-issued: admin alone signs, so we can record a commitment naming any investor
+      // (persona OR real external party) as observer — no external co-signature needed.
+      await create(admin, tid('Commitment'), commitArgs)
+    } else {
+      await createMulti([investor, admin], tid('Commitment'), commitArgs)
+    }
     // If the investor paid this leg for real from their own Loop wallet (CIP-56 token
     // transfer they signed), surface that genuine on-chain payment in the live feed.
     if (payment?.updateId) {

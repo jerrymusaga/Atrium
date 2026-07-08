@@ -18,9 +18,11 @@ import DA.Time (hours, days, addRelTime)
 import DA.Assert ((===))
 import DA.Optional (isSome)
 
--- An investor's locked cBTC commitment toward the fundraise. Co-signed by the registry
--- (admin) so it is unforgeable and backed by an on-ledger Holding. The founder (= seller)
--- observes every commitment so the Deal.Close gate can fetch + sum them.
+-- An investor's locked commitment toward the fundraise. Registry-issued (admin is the sole
+-- signatory): the investor's real authorization is their own wallet-signed CIP-56 token
+-- transfer to escrow — this contract is the registry's record of it, so it can name a real
+-- external (Loop) investor party as an observer without that party co-signing here. The
+-- founder (= seller) also observes so the Deal.Close gate can fetch + sum every commitment.
 template Commitment
   with
     admin       : Party
@@ -33,8 +35,8 @@ template Commitment
     asset       : Optional Text     -- the CIP-56 asset: "USDCx" | "cBTC" | "cETH" (default cBTC)
     usdValue    : Optional Decimal  -- USD value at commit time (oracle-priced); the raise is USD-denominated
   where
-    signatory investor, admin
-    observer founder
+    signatory admin
+    observer investor, founder
 
 -- An approval from a governance or compliance role. Signed by the approver alone;
 -- the founder observes it so the Deal.Close gate can fetch and verify all required roles.
@@ -284,7 +286,7 @@ testConditionalClose = script do
   let dealId = "HALDEN-2026-A"
 
   dealCid   <- submit seller do createCmd (Deal with seller, dealId, title = "Halden Series A", instrument = "HALDEN-EQUITY", quantity = 1000000.0, raiseTarget = 25.0, requiredApprovals = ["BOARD", "LEGAL", "COMPLIANCE"], tiers = ["Teaser", "Financials", "Legal"])
-  commitCid <- submitMulti [investor, admin] [] do createCmd (Commitment with admin, investor, founder = seller, dealId, asset = Some "USDCx", amount = 25.0, usdValue = Some 25.0, committedAt = now)
+  commitCid <- submit admin do createCmd (Commitment with admin, investor, founder = seller, dealId, asset = Some "USDCx", amount = 25.0, usdValue = Some 25.0, committedAt = now)
   offerCid  <- submit investor do createCmd (Offer with buyer = investor, seller, dealId, pricePerUnit = 25.0, quantity = 1000000.0, submittedAt = now)
   kycCid    <- submit kycp do createCmd (KYCAttestation with kycProvider = kycp, subject = investor, relyingParty = seller, level = "KYB-INSTITUTIONAL", jurisdiction = "US", issuedAt = now, expiresAt = addRelTime now (days 365))
   boardApp  <- submit board do createCmd (Approval with approver = board, role = "BOARD",      dealId, approvedAt = now, founder = seller, envelopeId = "ATR-BOARD-TEST",      documentHash = "sha256:board")

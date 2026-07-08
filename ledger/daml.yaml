@@ -6,7 +6,7 @@ sdk-version: 3.3.0-snapshot.20250930.0
 # 0.4–0.7 schema (non-Optional new Deal fields) is not an SCU-valid upgrade of it. A new name = a
 # clean baseline (we reseed the demo anyway). See docs/CBTC_PHASE_B_RUNBOOK / deploy notes.
 name: atrium-cm
-version: 0.8.0
+version: 0.9.0
 source: daml
 init-script: Atrium.DealRoom:setupDemo
 dependencies:
