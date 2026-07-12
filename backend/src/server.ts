@@ -1031,10 +1031,31 @@ app.post('/deals/:dealId/new', async (req, res) => {
     const prefix = String(req.body?.party ?? '')
     if (prefix !== SELLER) return res.status(403).json({ error: 'Only the founder can start a new deal' })
     const seller = await partyId(SELLER)
-    for (const c of (await acsOf(seller)).filter((x) => entityOf(x.templateId) === 'Deal' || entityOf(x.templateId) === 'Document')) {
-      await exercise(seller, c.templateId, c.contractId, 'Archive', {})
+    const registry = await ensureParty('Registry')
+    // A true reset: archive every deal-scoped contract, each as its own signatory (the executor
+    // holds actAs for all of them). Without this, a re-seed would skip the contracts that still
+    // exist and the demo could never return to its start state. Best-effort per contract.
+    const kill = async (party: string, cid: string, tpl: string) => {
+      try { await exercise(party, tpl, cid, 'Archive', {}); return 1 } catch { return 0 }
     }
-    res.json({ cleared: true })
+    let n = 0
+    // Seller-signed: the deal room itself.
+    for (const c of (await acsOf(seller)).filter((x) => ['Deal', 'Document', 'AccessGrant', 'AccessEvent'].includes(entityOf(x.templateId)))) {
+      n += await kill(seller, c.contractId, c.templateId)
+    }
+    // Registry-signed: commitments, the DvP legs, the cap table, distributions.
+    for (const c of (await acsOf(registry)).filter((x) => ['Commitment', 'Holding', 'AllocationFactory', 'Allocation', 'ShareCertificate', 'Distribution', 'DistributionReceipt'].includes(entityOf(x.templateId)))) {
+      n += await kill(registry, c.contractId, c.templateId)
+    }
+    // Signed by their own party (the founder only observes these), so archive as that signatory.
+    for (const c of await acsOf(seller)) {
+      const e = entityOf(c.templateId)
+      const a = c.createArgument as any
+      if (e === 'Approval' && a.approver) n += await kill(a.approver, c.contractId, c.templateId)
+      else if (e === 'Offer' && a.buyer) n += await kill(a.buyer, c.contractId, c.templateId)
+      else if (e === 'KYCAttestation' && a.kycProvider) n += await kill(a.kycProvider, c.contractId, c.templateId)
+    }
+    res.json({ cleared: true, archived: n })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
 
