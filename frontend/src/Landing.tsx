@@ -69,7 +69,7 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
 
       <section className="lp-hero">
         <div className="lp-hero-text">
-          <div className="lp-eyebrow mono" data-reveal>PRIVATE M&amp;A · CAPITAL MARKETS · RWA · BUILT ON CANTON</div>
+          <div className="lp-eyebrow mono" data-reveal>PRIVATE CAPITAL MARKETS · RWA · BUILT ON CANTON</div>
           <h1 className="lp-title" data-reveal>The data room<br /><span className="grad">that closes.</span></h1>
           <p className="lp-sub" data-reveal>
             Every data room is a filing cabinet with permissions; the close happens off-platform, over weeks.
