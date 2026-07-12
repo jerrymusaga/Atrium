@@ -417,7 +417,7 @@ export default function App() {
               {view.deal.raiseTarget ? <div><dt>Raise target</dt><dd className="mono">{fmtUsd(view.deal.raiseTarget)}</dd></div> : null}
               <div><dt>Deal ref</dt><dd className="mono">{view.deal.dealId}</dd></div>
             </dl>
-            {isSeller && !view.settled && (
+            {isSeller && (
               <button className="deal-new" onClick={() => setConfirmNew(true)}>⟲ Start a new deal</button>
             )}
           </div>
