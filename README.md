@@ -27,13 +27,17 @@ grants, commitments, approvals, the close — is a real contract on that validat
 - **Native atomic DvP** **is the close.** The capital leg and the ownership leg settle in one transaction
   or not at all — no escrow, no lawyers, no weeks. Both are absurd on a transparent chain without heavy ZK.
 
-## Real wallets, real money
-- **Sign in with your own Loop wallet** (`@fivenorth/loop-sdk`) — Atrium reads your real external Canton
-  party and your real on-chain holdings straight from the ledger. No app-managed keys.
-- **The investor's payment leg is a real CIP-56 token transfer** you sign in your own wallet; the deal
-  settles against it. Live commitments are **wallet-backed only** — a real token transfer or no commit.
-- **Self-onboarding invitation** — an investor requests access with their real party id; the founder
-  grants it on-ledger (a genuine `AccessGrant` issued to that party).
+## Wallet integration (built, off by default)
+Atrium integrates the **Loop wallet** (`@fivenorth/loop-sdk`) — sign in with your own external Canton
+party, read your real on-chain holdings straight from the ledger, and pay an investment leg as a real
+**CIP-56 token transfer you sign yourself**. It ships behind **`VITE_WALLET=1`**.
+
+It is **off in the public demo on purpose**: the deal room must be drivable end-to-end by anyone who
+doesn't have a Canton wallet. With it off, commitments are recorded on-ledger by the executor for the
+party holding the lens — the ledger guarantees (disclosure, atomicity, the close gate) are identical.
+
+Honest status: granting a **cross-participant** Loop party on-ledger additionally requires the Atrium
+package to be *vetted on that wallet's participant* — an infra step outside this repo.
 
 ## What's ledger-verified
 Both differentiators are **proven in Daml, not asserted**:
