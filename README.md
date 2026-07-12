@@ -21,6 +21,17 @@ Atrium is deployed and running on a real Canton validator — not LocalNet, not 
 feed** shows real on-ledger transactions (Canton `updateId`s) as they land. Every write in the live app —
 grants, commitments, approvals, the close — is a real contract on that validator.
 
+## Verify this yourself
+1. **The package is really on devnet** — `atrium-cm` 0.9.0, id `e20be214a2147aa9509f662f18da7e159b5ab9bfdaaca08215d3269f13e68db5`, deployed to the Encode org's Seaport validator.
+2. **The deployed templates really work there** — create a `Deal` or `Commitment` against that package directly on the validator (independent of this app), and it commits.
+3. **The live app is really talking to that validator** — `GET /health` returns the validator endpoint and the active package id.
+4. **The transactions are real** — the in-app **ledger-activity feed** shows genuine Canton `updateId`s as each contract lands (`GET /activity`).
+
+**You will *not* find this deal on a public block explorer — and that is the point.** Canton projects a
+contract only to its stakeholders, so an unrelated party cannot browse Halden's cap table or bid book.
+On a transparent chain both would be public to the world. Here, privacy is the ledger's guarantee, not a
+UI setting — which is precisely why the diligence *and* the settlement can live on the same ledger.
+
 ## Why Canton (the whole idea)
 - **Selective disclosure** (signatories / observers + sub-transaction privacy) **is the data room.**
   Each buyer sees only their tier; rival bidders are invisible; every access is an on-ledger event.
