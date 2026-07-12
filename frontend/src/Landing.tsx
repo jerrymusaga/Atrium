@@ -78,7 +78,7 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
           </p>
           <div className="lp-cta" data-reveal>
             <button className="btn solid lp-enter" onClick={onEnter}>Enter the deal room →</button>
-            <span className="lp-cta-note mono">Live deal: Halden Robotics — 12% secondary</span>
+            <span className="lp-cta-note mono">Live deal: Halden Robotics — $2.5M Series A</span>
           </div>
         </div>
 
@@ -93,7 +93,7 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
             <div className="dc-doc">
               <div className="dc-doc-top"><span className="mono">TIER 1</span><span className="mono dc-open">● open to all</span></div>
               <div className="dc-title-row">Investment teaser</div>
-              <span className="dc-val teaser mono">Warehouse robotics · rev CAGR ~70% · 12% secondary on offer</span>
+              <span className="dc-val teaser mono">Warehouse robotics · rev CAGR ~70% · $2.5M Series A · 12% equity</span>
             </div>
 
             <div className={`dc-doc ${lens.sealed ? 'is-sealed' : ''}`}>
@@ -198,9 +198,9 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
           <ul className="mini-cap">
             <li><span className="mc-who">Founders</span><span className="mc-bar"><i style={{ width: '60%' }} /></span><span className="mono mc-pct">60%</span></li>
             <li><span className="mc-who">ESOP</span><span className="mc-bar"><i style={{ width: '28%' }} /></span><span className="mono mc-pct">28%</span></li>
-            <li className="is-new"><span className="mc-who">Buyer</span><span className="mc-bar"><i style={{ width: '12%' }} /></span><span className="mono mc-pct">12%</span></li>
+            <li className="is-new"><span className="mc-who">Investors</span><span className="mc-bar"><i style={{ width: '12%' }} /></span><span className="mono mc-pct">12%</span></li>
           </ul>
-          <p className="lp-panel-note">Ownership is a real on-ledger share certificate. The 12% stake moves to the buyer the instant the deal settles.</p>
+          <p className="lp-panel-note">Ownership is a real on-ledger share certificate. The 12% round is allocated to investors pro-rata the instant the deal settles.</p>
         </div>
       </section>
 

@@ -534,10 +534,17 @@ app.post('/deals/:dealId/ask', async (req, res) => {
     const authorized = DOC_IDS.map((id) => ({ id, meta: docMeta(id) })).filter((d) => d.meta && tier >= d.meta.tier)
     const context = authorized.map((d) => `### ${d.meta!.title} — ${named(d.meta!.tier)}\n${decryptDocument(d.id)}`).join('\n\n')
 
+    // The founder owns the room and sees every tier — never tell them access is restricted. Only a
+    // buyer's answer is bounded by their on-ledger grant.
+    const bounds = isSeller
+      ? `You are answering for the FOUNDER, who owns this deal room and is authorized on EVERY tier — all of the deal's documents are below. Never say access is restricted and never suggest they lack privileges; they have full access. If the answer simply is not in these documents, say plainly that it is not in the data room yet and suggest what to add.`
+      : `You may ONLY use the documents below — they are EXACTLY what this party's on-ledger access grant authorizes. If the question needs information that is not in these documents, do NOT answer from outside knowledge. Reply that access is restricted: state plainly that the answer sits in a higher access tier (e.g. ${named(Math.min(tier + 1, dealTiers.length))}) and that this party has insufficient privileges to view it — recommend requesting that tier from the founder.`
+
     const system = `You are the diligence copilot inside Atrium, a private capital markets OS on Canton Network.
-You are answering for the party "${prefix}". You may ONLY use the documents below — they are EXACTLY what this party's on-ledger access grant authorizes. Do not use outside knowledge and never invent figures.
+You are answering for the party "${prefix}". Do not use outside knowledge and never invent figures.
 The deal's named access tiers, in order, are: ${dealTiers.map((t, i) => `"${t}" (tier ${i + 1})`).join(', ')}.
-If the question needs information that is not in these documents, do NOT answer from outside knowledge. Reply that access is restricted: state plainly that the answer sits in a higher access tier (e.g. ${named(Math.min(tier + 1, dealTiers.length))}) and that this party has insufficient privileges to view it — recommend requesting that tier from the founder. Be concise and cite the specific figures you use from the authorized documents.
+${bounds}
+Be concise and cite the specific figures you use from the authorized documents.
 
 AUTHORIZED DOCUMENTS:
 ${context || '(none — this party has no document access)'}`
