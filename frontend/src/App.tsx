@@ -11,6 +11,10 @@ import { ASSETS } from './types'
 const DEMO_TIERS = ['Teaser', 'Financials', 'Legal']
 
 const LIVE = import.meta.env.VITE_LIVE === '1'
+// Loop wallet sign-in + wallet-signed CIP-56 payment leg. Off by default: the demo runs
+// entirely executor-side so anyone can drive a deal to close without a Canton wallet.
+// Set VITE_WALLET=1 to expose the wallet flow (real party, holdings, wallet-signed commits).
+const WALLET = import.meta.env.VITE_WALLET === '1'
 const client = LIVE ? httpClient : mockClient
 
 // Format a per-share rate readably even when it's a small fraction.
@@ -103,8 +107,9 @@ export default function App() {
   // Balance of the currently-selected commit asset in the connected wallet, if held.
   const walletBalance = wallet.holdings.find((h) => h.symbol === commitAsset || h.id === commitAsset)
   const walletAvail = walletBalance ? Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0) : 0
-  // Live commits must be wallet-backed (real payment). Compute why a commit is blocked.
-  const liveCommitBlock: string | null = !LIVE ? null
+  // With the wallet flow on, a live commit must be backed by a real wallet-signed transfer.
+  // With it off (the default), commits go straight through the executor — nothing blocks.
+  const liveCommitBlock: string | null = !(LIVE && WALLET) ? null
     : wallet.status !== 'connected' ? 'connect'
     : !walletBalance ? 'no-asset'
     : Number(commitAmt) > walletAvail ? 'insufficient'
@@ -233,10 +238,10 @@ export default function App() {
     setMsg(null)
     try {
       let payment: import('./types').CommitPayment | undefined
-      // Everything real: on the live ledger a commitment MUST be backed by a genuine
-      // CIP-56 token transfer the investor signs in their own Loop wallet — no wallet,
-      // no balance, or a declined signature means no commit (no modeled fallback).
-      if (LIVE) {
+      // When the wallet flow is enabled, a live commitment must be backed by a genuine
+      // CIP-56 token transfer the investor signs in their own Loop wallet. Otherwise the
+      // commitment is recorded on-ledger by the executor for the party holding the lens.
+      if (LIVE && WALLET) {
         if (wallet.status !== 'connected') {
           setMsg('Connect your Loop wallet (left) to invest — commitments settle on-chain.')
           setCommitting(false); return
@@ -400,7 +405,7 @@ export default function App() {
           </div>
         </div>
 
-        <WalletConnect onRequestAccess={LIVE ? requestAccess : undefined} requested={reqSent} />
+        {WALLET && <WalletConnect onRequestAccess={LIVE ? requestAccess : undefined} requested={reqSent} />}
 
         {view?.deal && (
           <div className="deal-card">
@@ -460,7 +465,7 @@ export default function App() {
               Grant up to “{tierName(inviteTier)}”
             </button>
 
-            {accessReqs.length > 0 && (
+            {WALLET && accessReqs.length > 0 && (
               <div className="access-reqs">
                 <div className="eyebrow">Wallet access requests</div>
                 <ul className="access-list">
@@ -893,7 +898,7 @@ export default function App() {
                     = {fmtUsd(Number(commitAmt) * (view.rates[commitAsset] ?? 0))} @ oracle {fmtUsd(view.rates[commitAsset] ?? 0)}/{commitAsset}
                   </p>
                 )}
-                {wallet.status === 'connected' ? (
+                {WALLET && (wallet.status === 'connected' ? (
                   <p className={`panel-note commit-wallet ${liveCommitBlock ? 'commit-wallet-warn' : ''}`}>
                     <span className="wallet-dot" /> Paying from your Loop wallet <span className="mono">{walletShort}</span>
                     {walletBalance
@@ -906,7 +911,7 @@ export default function App() {
                       ? <><strong>Connect your Loop wallet</strong> (left) to invest — every commitment settles as a real on-chain token transfer you sign.</>
                       : <>Connect your <strong>Loop wallet</strong> (left) to pay this leg from your own Canton party.</>}
                   </p>
-                )}
+                ))}
                 <p className="panel-note">
                   A <strong>{fmtUsd(view?.deal?.raiseTarget ?? 0)}</strong> round for the {(view?.deal?.quantity ?? 120000).toLocaleString()}-share
                   stake. Commit in <strong>USDCx, cBTC, or cETH</strong> — valued in USD via the oracle; your equity is allocated pro-rata to that value at close. Rivals can’t see your commitment.
