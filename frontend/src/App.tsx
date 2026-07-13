@@ -334,6 +334,22 @@ export default function App() {
     } catch (e) { setMsg((e as Error).message) } finally { setLoadingDemo(false) }
   }
 
+  // LIVE runs a single shared deal, so "clear it" is destructive for everyone looking at the public
+  // demo. There, the same button restores the seeded round instead — clear + reseed in one action, so
+  // any click lands on a populated deal room rather than an empty husk. Building a deal from scratch
+  // stays available in the mock, where nothing is shared.
+  async function resetDemo() {
+    setConfirmNew(false)
+    setMsg(null)
+    try {
+      await client.startNewDeal(viewer)
+      await client.loadDemo()
+      await refreshViewers()
+      await load(true)
+      setMsg('Demo reset — the round is back to its starting state: 92% raised, approvals pending, unsettled.')
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
   async function startNewDeal() {
     setConfirmNew(false)
     setMsg(null)
@@ -418,7 +434,9 @@ export default function App() {
               <div><dt>Deal ref</dt><dd className="mono">{view.deal.dealId}</dd></div>
             </dl>
             {isSeller && (
-              <button className="deal-new" onClick={() => setConfirmNew(true)}>⟲ Start a new deal</button>
+              <button className="deal-new" onClick={() => setConfirmNew(true)}>
+                {LIVE ? '⟲ Reset demo' : '⟲ Start a new deal'}
+              </button>
             )}
           </div>
         )}
@@ -1298,11 +1316,17 @@ export default function App() {
         {confirmNew && (
           <div className="doc-modal-backdrop" onClick={() => setConfirmNew(false)}>
             <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
-              <h3>Start a new deal?</h3>
-              <p>This clears the current round so you can set one up from scratch — tiers, raise target, stake, and investors.</p>
+              <h3>{LIVE ? 'Reset the demo?' : 'Start a new deal?'}</h3>
+              <p>
+                {LIVE
+                  ? 'This restores the round to its starting state — 92% raised, approvals pending, unsettled — so you can walk the whole flow again from the top.'
+                  : 'This clears the current round so you can set one up from scratch — tiers, raise target, stake, and investors.'}
+              </p>
               <div className="confirm-actions">
                 <button className="btn ghost" onClick={() => setConfirmNew(false)}>Cancel</button>
-                <button className="btn solid" onClick={startNewDeal}>⟲ Start a new deal</button>
+                <button className="btn solid" onClick={LIVE ? resetDemo : startNewDeal}>
+                  {LIVE ? '⟲ Reset demo' : '⟲ Start a new deal'}
+                </button>
               </div>
             </div>
           </div>
