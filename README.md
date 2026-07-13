@@ -118,14 +118,17 @@ We're precise about this on purpose.
 
 ## Ledger-verified proofs
 
-The two differentiators are **proven in Daml, not asserted**. Run `make ledger-test`:
+The guarantees are **proven in Daml, not asserted** — 7 scripts, all green. Run `make ledger-test`:
 
 | Script | Proves |
 |---|---|
 | `testPrivacyProjection` | Rivals are invisible; the access trail is scoped per party. |
-| `testAtomicDvP` | The close swaps capital and ownership in one transaction. |
+| `testKYCGate` | An investor without valid, unexpired KYC cannot be closed with. |
+| `testConditionalClose` | The gate fires only when raise target + KYC + **all** approvals are satisfied. |
+| `testAtomicDvP` | The close swaps capital and ownership in a single transaction. |
 | `testAtomicityHolds` | Pull a leg mid-close → the whole thing reverts, nothing moves. |
-| `testConditionalClose` | The gate fires only when raise target + KYC + all approvals are satisfied. |
+| `testDistribution` | Post-close pro-rata distribution pays every holder atomically, each receipt private. |
+| `testShareTransfer` | Tokenized ownership moves on the cap table as a real `ShareCertificate`. |
 
 ## Architecture
 
