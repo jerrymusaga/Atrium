@@ -15,6 +15,13 @@ const LIVE = import.meta.env.VITE_LIVE === '1'
 // entirely executor-side so anyone can drive a deal to close without a Canton wallet.
 // Set VITE_WALLET=1 to expose the wallet flow (real party, holdings, wallet-signed commits).
 const WALLET = import.meta.env.VITE_WALLET === '1'
+// Self-onboarding a wallet party (request access → the founder issues an on-ledger AccessGrant naming
+// it) is the one wallet path that cannot work yet: the grant makes the wallet's participant an informee,
+// and that participant has not vetted the Atrium package, so Canton finds no synchronizer that can
+// validate the transaction (NO_SYNCHRONIZER_FOR_SUBMISSION). Sign-in, holdings and the token transfer
+// all use network-vetted Splice packages, so they work cross-participant — only this doesn't. Keep it
+// off until the package is vetted on the wallet-hosting participant.
+const WALLET_INVITE = false
 const client = LIVE ? httpClient : mockClient
 
 // Format a per-share rate readably even when it's a small fraction.
@@ -107,9 +114,17 @@ export default function App() {
   // Balance of the currently-selected commit asset in the connected wallet, if held.
   const walletBalance = wallet.holdings.find((h) => h.symbol === commitAsset || h.id === commitAsset)
   const walletAvail = walletBalance ? Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0) : 0
-  // With the wallet flow on, a live commit must be backed by a real wallet-signed transfer.
-  // With it off (the default), commits go straight through the executor — nothing blocks.
-  const liveCommitBlock: string | null = !(LIVE && WALLET) ? null
+  // The wallet is an OPTION, never a requirement. If it's connected and actually holds enough of the
+  // chosen asset, the investor signs a real CIP-56 transfer for the payment leg. Otherwise the
+  // commitment is still recorded on-ledger by the executor — so a visitor without a wallet (or with an
+  // unfunded one) is never blocked from driving the deal to close.
+  const walletPays = LIVE && WALLET
+    && wallet.status === 'connected'
+    && !!walletBalance
+    && Number(commitAmt) > 0
+    && Number(commitAmt) <= walletAvail
+  // Why the wallet ISN'T paying, for the note under the commit box (null = it is, or wallet is off).
+  const walletIdle: string | null = !(LIVE && WALLET) ? null
     : wallet.status !== 'connected' ? 'connect'
     : !walletBalance ? 'no-asset'
     : Number(commitAmt) > walletAvail ? 'insufficient'
@@ -238,22 +253,10 @@ export default function App() {
     setMsg(null)
     try {
       let payment: import('./types').CommitPayment | undefined
-      // When the wallet flow is enabled, a live commitment must be backed by a genuine
-      // CIP-56 token transfer the investor signs in their own Loop wallet. Otherwise the
-      // commitment is recorded on-ledger by the executor for the party holding the lens.
-      if (LIVE && WALLET) {
-        if (wallet.status !== 'connected') {
-          setMsg('Connect your Loop wallet (left) to invest — commitments settle on-chain.')
-          setCommitting(false); return
-        }
-        if (!walletBalance) {
-          setMsg(`Your Loop wallet holds no ${commitAsset}. Choose an asset you hold, or top up.`)
-          setCommitting(false); return
-        }
-        if (amt > walletAvail) {
-          setMsg(`Your Loop wallet holds ${walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${commitAsset} — reduce the amount or top up.`)
-          setCommitting(false); return
-        }
+      // If a funded wallet is connected, the investor signs a REAL CIP-56 transfer for the payment
+      // leg and the commitment is anchored to it. If not, the commitment is still recorded on-ledger
+      // by the executor — the wallet enriches the flow, it never gates it.
+      if (walletPays && walletBalance) {
         const payTo = await client.getPayToParty()
         setMsg('Approve the transfer in your Loop wallet…')
         const r = await transferToken(payTo.party, commitAmt, { admin: walletBalance.admin, id: walletBalance.id }, `Atrium — ${view?.deal?.title ?? 'commitment'}`)
@@ -421,7 +424,7 @@ export default function App() {
           </div>
         </div>
 
-        {WALLET && <WalletConnect onRequestAccess={LIVE ? requestAccess : undefined} requested={reqSent} />}
+        {WALLET && <WalletConnect onRequestAccess={WALLET_INVITE && LIVE ? requestAccess : undefined} requested={reqSent} />}
 
         {view?.deal && (
           <div className="deal-card">
@@ -483,7 +486,7 @@ export default function App() {
               Grant up to “{tierName(inviteTier)}”
             </button>
 
-            {WALLET && accessReqs.length > 0 && (
+            {WALLET_INVITE && accessReqs.length > 0 && (
               <div className="access-reqs">
                 <div className="eyebrow">Wallet access requests</div>
                 <ul className="access-list">
@@ -907,7 +910,7 @@ export default function App() {
                     onChange={(e) => setCommitAmt(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && Number(commitAmt) > 0) commit() }}
                   />
-                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0) || !!liveCommitBlock} onClick={commit}>
+                  <button className="btn solid" disabled={committing || !(Number(commitAmt) > 0)} onClick={commit}>
                     {committing ? 'Locking…' : 'Commit'}
                   </button>
                 </div>
@@ -916,18 +919,20 @@ export default function App() {
                     = {fmtUsd(Number(commitAmt) * (view.rates[commitAsset] ?? 0))} @ oracle {fmtUsd(view.rates[commitAsset] ?? 0)}/{commitAsset}
                   </p>
                 )}
-                {WALLET && (wallet.status === 'connected' ? (
-                  <p className={`panel-note commit-wallet ${liveCommitBlock ? 'commit-wallet-warn' : ''}`}>
+                {WALLET && (walletPays ? (
+                  <p className="panel-note commit-wallet">
                     <span className="wallet-dot" /> Paying from your Loop wallet <span className="mono">{walletShort}</span>
-                    {walletBalance
-                      ? <> · {commitAsset} on hand: <span className="mono">{walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>{liveCommitBlock === 'insufficient' && <> — not enough for this commit</>}</>
-                      : <> · no {commitAsset} in this wallet {LIVE ? '— pick an asset you hold' : 'yet'}</>}
+                    {' '}· {commitAsset} on hand: <span className="mono">{walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>
+                    {' '}— you’ll sign a <strong>real CIP-56 transfer</strong> for this leg.
                   </p>
                 ) : (
-                  <p className={`panel-note ${LIVE ? 'commit-wallet-warn' : 'commit-wallet-idle'}`}>
-                    {LIVE
-                      ? <><strong>Connect your Loop wallet</strong> (left) to invest — every commitment settles as a real on-chain token transfer you sign.</>
-                      : <>Connect your <strong>Loop wallet</strong> (left) to pay this leg from your own Canton party.</>}
+                  <p className="panel-note commit-wallet-idle">
+                    {walletIdle === 'connect'
+                      ? <>Optional: <strong>connect your Loop wallet</strong> (left) to pay this leg yourself as a real on-chain transfer.</>
+                      : walletIdle === 'no-asset'
+                        ? <>Your wallet holds no <strong>{commitAsset}</strong> — pick an asset you hold to pay it yourself.</>
+                        : <>Not enough <strong>{commitAsset}</strong> in your wallet to pay this leg yourself.</>}
+                    {' '}The commitment is still recorded on-ledger either way.
                   </p>
                 ))}
                 <p className="panel-note">
