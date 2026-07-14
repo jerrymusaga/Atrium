@@ -122,8 +122,11 @@ export default function App() {
 
   const wallet = useLoopWallet()
   const walletShort = wallet.partyId ? `${wallet.partyId.slice(0, 10)}…${wallet.partyId.slice(-6)}` : ''
-  // Balance of the currently-selected commit asset in the connected wallet, if held.
-  const walletBalance = wallet.holdings.find((h) => h.symbol === commitAsset || h.id === commitAsset)
+  // Balance of the currently-selected commit asset in the connected wallet, if held. Match loosely:
+  // the registry decides how it spells an instrument (cBTC / CBTC / cbtc), and a case-sensitive
+  // compare silently reports "you hold none" on a wallet that plainly does.
+  const sameAsset = (a?: string, b?: string) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase()
+  const walletBalance = wallet.holdings.find((h) => sameAsset(h.symbol, commitAsset) || sameAsset(h.id, commitAsset))
   const walletAvail = walletBalance ? Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0) : 0
   // The wallet is an OPTION, never a requirement. If it's connected and actually holds enough of the
   // chosen asset, the investor signs a real CIP-56 transfer for the payment leg. Otherwise the
