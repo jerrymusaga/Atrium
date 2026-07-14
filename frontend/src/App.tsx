@@ -50,6 +50,17 @@ Canton, and the signed PDF is encrypted in the data room with its hash
 anchored on-ledger for tamper-evidence.`
 }
 
+// A sha256 anchor is ~71 chars — far too wide for a card. Show the ends (still recognisable, still
+// verifiable by eye against the ledger) and keep the full digest in the tooltip.
+function shortHash(h?: string) {
+  if (!h) return ''
+  const i = h.indexOf(':')
+  const algo = i >= 0 ? h.slice(0, i + 1) : ''
+  const hex = i >= 0 ? h.slice(i + 1) : h
+  if (hex.length <= 20) return h
+  return `${algo}${hex.slice(0, 10)}…${hex.slice(-8)}`
+}
+
 // Suggest a download filename extension from the media type.
 function extFor(mime?: string) {
   if (!mime) return ''
@@ -627,7 +638,10 @@ export default function App() {
                 <div className="sig-receipt">
                   <span className="sig-check mono">✓ SIGNED</span>
                   {view.myApproval.envelopeId && <span className="sig-title mono">{view.myApproval.envelopeId}</span>}
-                  <span className="sig-hash mono">{view.myApproval.documentHash || view.documents.find((d) => d.docId === `resolution-${approverRole.toLowerCase()}`)?.contentHash}</span>
+                  {(() => {
+                    const h = view.myApproval.documentHash || view.documents.find((d) => d.docId === `resolution-${approverRole.toLowerCase()}`)?.contentHash
+                    return <span className="sig-hash mono" title={h}>{shortHash(h)}</span>
+                  })()}
                 </div>
               </>
             ) : (
@@ -657,7 +671,7 @@ export default function App() {
                   <div className="doc-top">
                     <span className="tier mono" title={`Access tier ${d.tier}`}>{(d.tierLabel ?? `TIER ${d.tier}`).toUpperCase()}</span>
                     {d.accessible
-                      ? <span className="hash mono">{d.contentHash}</span>
+                      ? <span className="hash mono" title={d.contentHash}>{shortHash(d.contentHash)}</span>
                       : <span className="lock">🔒</span>}
                   </div>
                   {d.accessible ? (
@@ -798,8 +812,8 @@ export default function App() {
                         </button>
                       </div>
                       <div className="idoc-hashes mono">
-                        <div className={d.intact ? '' : 'idoc-mismatch'}><span className="idoc-lbl">ledger</span> {d.ledgerHash}</div>
-                        <div className={d.intact ? '' : 'idoc-mismatch'}><span className="idoc-lbl">vault&nbsp;</span> {d.recomputedHash}</div>
+                        <div className={d.intact ? '' : 'idoc-mismatch'} title={d.ledgerHash}><span className="idoc-lbl">ledger</span> {shortHash(d.ledgerHash)}</div>
+                        <div className={d.intact ? '' : 'idoc-mismatch'} title={d.recomputedHash}><span className="idoc-lbl">vault&nbsp;</span> {shortHash(d.recomputedHash)}</div>
                       </div>
                     </li>
                   ))}
