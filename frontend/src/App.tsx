@@ -127,7 +127,8 @@ export default function App() {
   // compare silently reports "you hold none" on a wallet that plainly does.
   const sameAsset = (a?: string, b?: string) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase()
   const walletBalance = wallet.holdings.find((h) => sameAsset(h.symbol, commitAsset) || sameAsset(h.id, commitAsset))
-  const walletAvail = walletBalance ? Number(walletBalance.unlocked) / Math.pow(10, walletBalance.decimals || 0) : 0
+  // Canton token amounts are Daml Decimals — already the human amount, so use as-is (no 10^decimals).
+  const walletAvail = walletBalance ? Number(walletBalance.unlocked) : 0
   // The wallet is an OPTION, never a requirement. If it's connected and actually holds enough of the
   // chosen asset, the investor signs a real CIP-56 transfer for the payment leg. Otherwise the
   // commitment is still recorded on-ledger by the executor — so a visitor without a wallet (or with an

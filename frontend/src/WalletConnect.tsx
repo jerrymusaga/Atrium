@@ -3,12 +3,13 @@ import { initLoop, useLoopWallet } from './ledger/loopWallet'
 
 const short = (p: string) => (p.length > 22 ? `${p.slice(0, 10)}…${p.slice(-8)}` : p)
 
-// Render a token balance the way Loop reports it (integer coin string + decimals).
-function fmtAmount(raw: string, decimals: number) {
+// Canton token amounts (Amulet/CC and CIP-56 holdings) are Daml Decimals — already the human
+// amount, not Ethereum-style base units. So we format the value as-is; dividing by 10^decimals
+// (CC has 10) turned 199,970 CC into 0.00002.
+function fmtAmount(raw: string, _decimals: number) {
   const n = Number(raw)
   if (!isFinite(n)) return raw
-  const v = n / Math.pow(10, decimals || 0)
-  return v.toLocaleString(undefined, { maximumFractionDigits: 6 })
+  return n.toLocaleString(undefined, { maximumFractionDigits: 6 })
 }
 
 // Real Canton sign-in. Connecting proves the user's own external party and reads their
