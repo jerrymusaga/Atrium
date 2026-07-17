@@ -266,8 +266,10 @@ export default function App() {
     if (!(amt > 0)) return
     setCommitting(true)
     setMsg(null)
+    // Declared outside the try so the catch can tell "the transfer never happened" apart from
+    // "the transfer settled but recording it failed" — those are very different situations.
+    let payment: import('./types').CommitPayment | undefined
     try {
-      let payment: import('./types').CommitPayment | undefined
       // If a funded wallet is connected, the investor signs a REAL CIP-56 transfer for the payment
       // leg and the commitment is anchored to it. If not, the commitment is still recorded on-ledger
       // by the executor — the wallet enriches the flow, it never gates it.
@@ -284,7 +286,16 @@ export default function App() {
       setMsg(payment?.updateId
         ? `Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) — real transfer signed in your Loop wallet · updateId ${payment.updateId.slice(0, 16)}…`
         : `Committed ${amt} ${commitAsset} (${fmtUsd(usd)}) on-ledger — the founder sees your commitment toward the raise target.`)
-    } catch (e) { setMsg(`Commit not recorded — ${(e as Error).message}`) } finally { setCommitting(false) }
+    } catch (e) {
+      // Log the raw error: the Loop signing flow can reload the page and wipe the toast, and the
+      // message alone hides whether the token transfer failed or the commit-record call did.
+      // (Enable "Preserve log" in the console to read this across a reload.)
+      console.error('[atrium] commit failed', { error: e, paidWithWallet: !!payment, payment })
+      const detail = (e as Error)?.message || String(e)
+      setMsg(payment?.updateId
+        ? `⚠️ Transfer SENT (updateId ${payment.updateId.slice(0, 16)}…) but the commitment was NOT recorded — ${detail}`
+        : `Commit not recorded — ${detail}`)
+    } finally { setCommitting(false) }
   }
 
   async function signAndApprove() {

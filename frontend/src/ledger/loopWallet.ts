@@ -153,8 +153,12 @@ export async function transferToken(
     { instrument_admin: instrument.admin, instrument_id: instrument.id },
     { executionMode: 'wait', message: memo ?? 'Atrium commitment', estimateTraffic: true },
   )) as Record<string, unknown> | undefined
+  // Log the raw response: this is the only place we can see what the registry actually did — a
+  // 1-step settle, a pending 2-step TransferInstruction, or a rejection. ("Preserve log" in the
+  // console keeps it across the reload the signing popup can cause.)
+  console.info('[atrium] loop transfer response', res)
   const r = (res ?? {}) as Record<string, any>
-  if (r.error) throw new Error(r.error?.error_message ?? 'Transfer was rejected by the ledger.')
+  if (r.error) throw new Error(r.error?.error_message ?? r.error?.message ?? JSON.stringify(r.error))
   void refreshHoldings()
   return { updateId: r.update_id ?? r.updateId, commandId: r.command_id ?? r.commandId, status: r.status, raw: res }
 }
