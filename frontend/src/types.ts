@@ -160,6 +160,8 @@ export type DealView = {
   distribution?: DistributionSummary | null   // founder / regulator: declared capital distribution
   myDistribution?: MyDistribution | null       // holder lens: their own private payout receipt
   rates?: Rates                          // the price oracle (USD per unit) used to value commitments
+  ratesSource?: 'live' | 'fallback'      // 'live' = real BTC/ETH spot (cBTC/cETH are 1:1 backed)
+  ratesAt?: string | null                // when the live rates were last fetched
 }
 
 // Provable integrity — proof that the off-chain vault still matches what Canton recorded.

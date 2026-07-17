@@ -651,3 +651,6 @@ body {
 .access-party { font-size: 11px; color: var(--muted); }
 .access-grant { flex: 0 0 auto; font-size: 11px; padding: 7px 11px; background: var(--steel); border-color: var(--steel); color: #0a121a; font-weight: 600; }
 .access-grant:hover { background: #6fa0c6; }
+
+/* Live spot price marker on the commit oracle line. */
+.rate-live { color: var(--ok, #4FA88B); }

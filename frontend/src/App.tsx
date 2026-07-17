@@ -935,6 +935,7 @@ export default function App() {
                 {Number(commitAmt) > 0 && view?.rates && (
                   <p className="panel-note commit-usd mono">
                     = {fmtUsd(Number(commitAmt) * (view.rates[commitAsset] ?? 0))} @ oracle {fmtUsd(view.rates[commitAsset] ?? 0)}/{commitAsset}
+                    {view.ratesSource === 'live' && <> · <span className="rate-live">● live spot</span></>}
                   </p>
                 )}
                 {WALLET && (walletPays ? (
@@ -955,7 +956,7 @@ export default function App() {
                 ))}
                 <p className="panel-note">
                   A <strong>{fmtUsd(view?.deal?.raiseTarget ?? 0)}</strong> round for the {(view?.deal?.quantity ?? 120000).toLocaleString()}-share
-                  stake. Commit in <strong>USDCx, cBTC, or cETH</strong> — valued in USD via the oracle; your equity is allocated pro-rata to that value at close. Rivals can’t see your commitment.
+                  stake. Commit in <strong>USDCx, cBTC, or cETH</strong> — valued in USD at the {view?.ratesSource === 'live' ? <><strong>live BTC/ETH spot</strong> (cBTC is 1:1 BTC-backed, cETH is 1:1 wrapped ETH)</> : <>oracle</>}; your equity is allocated pro-rata to that value at close. Rivals can’t see your commitment.
                 </p>
               </>
             )}

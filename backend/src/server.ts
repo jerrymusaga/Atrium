@@ -52,9 +52,37 @@ const STAGE3 = process.env.ATRIUM_STAGE3 === '1'
 const DEFAULT_TIERS = ['Teaser', 'Financials', 'Legal']
 const tierLabelOf = (tiers: string[], tier: number) => tiers[tier - 1] ?? `Tier ${tier}`
 
-// Price oracle (USD per unit) — Chainlink in production. The raise is USD-denominated; commitments
-// in any CIP-56 asset (USDCx / cBTC / cETH) are valued here. Surfaced to the frontend for previews.
-const RATES: Record<string, number> = { USDCx: 1, cBTC: 100000, cETH: 4000 }
+// --- Price oracle (USD per unit) -------------------------------------------------------------
+// The raise is USD-denominated; commitments in any CIP-56 asset are valued here. These are REAL
+// prices: cBTC is 1:1 BTC-backed (BitSafe) and cETH is 1:1 wrapped ETH (OnRails), so the live
+// BTC/ETH spot IS their price — not an approximation. USDCx is 1:1 USDC, so par is exact.
+// We poll a public spot feed and keep the last good value; if it's ever unreachable we fall back
+// to these figures rather than block a commit. `ratesSource` tells the UI which it's showing.
+const FALLBACK_RATES: Record<string, number> = { USDCx: 1, cBTC: 100000, cETH: 4000 }
+let RATES: Record<string, number> = { ...FALLBACK_RATES }
+let ratesSource: 'live' | 'fallback' = 'fallback'
+let ratesAt: string | null = null
+
+async function refreshRates(): Promise<void> {
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd', {
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) return
+    const j = (await res.json()) as { bitcoin?: { usd?: number }; ethereum?: { usd?: number } }
+    const btc = Number(j?.bitcoin?.usd)
+    const eth = Number(j?.ethereum?.usd)
+    if (btc > 0 && eth > 0) {
+      // USDCx is 1:1 USDC — par, never fetched.
+      RATES = { USDCx: 1, cBTC: btc, cETH: eth }
+      ratesSource = 'live'
+      ratesAt = new Date().toISOString()
+    }
+  } catch { /* keep the last good rates — a dead feed must never block a commit */ }
+}
+void refreshRates()
+setInterval(() => void refreshRates(), 60_000).unref?.()
+
 const usdOf = (asset: string, amount: number) => amount * (RATES[asset] ?? 0)
 
 const PARTY_PREFIX = process.env.PARTY_PREFIX ?? ''
@@ -350,7 +378,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       documents, accessTrail, offers, holdings, capTable, settled,
       kyc: isSeller ? null : kycOf(party),
       conditions, myCommitment, myApproval, investorsDetail, lifecycle,
-      distribution, myDistribution, rates: RATES,
+      distribution, myDistribution, rates: RATES, ratesSource, ratesAt,
     })
   } catch (e) { res.status(500).json({ error: (e as Error).message }) }
 })
@@ -1129,14 +1157,22 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     // Multi-asset commitments: Boranic 15 cBTC ($1.5M) + Meridian 200 cETH ($0.8M) = $2.3M/$2.5M
     // seeded; Prometheus tops up in USDCx via the UI. usdValue is oracle-priced at commit time.
     const registry = await ensureParty('Registry')
-    if (!has('Commitment', (a) => a.investor === boranic)) {
-      await createMulti([boranic, registry], tid('Commitment'), { admin: registry, investor: boranic, founder: seller, dealId: DEAL_ID, asset: 'cBTC', amount: '15.0000', usdValue: usdOf('cBTC', 15).toFixed(4), committedAt: now })
-      did.push('Commitment:Boranic')
+    // The oracle is live, so the seed targets USD and derives the asset quantity from the current
+    // rate — hardcoding quantities would let the demo's funded % drift with the BTC/ETH market
+    // (and 15 cBTC + 200 cETH, sized for the old fixed rates, would seed 52% instead of 92%).
+    // usdValue is the oracle price AT COMMIT TIME, exactly as a real raise records it.
+    const seedCommit = async (investor: string, asset: 'cBTC' | 'cETH', usd: number, label: string) => {
+      if (has('Commitment', (a) => a.investor === investor)) return
+      const rate = RATES[asset] || FALLBACK_RATES[asset]
+      const amount = usd / rate
+      await createMulti([investor, registry], tid('Commitment'), {
+        admin: registry, investor, founder: seller, dealId: DEAL_ID,
+        asset, amount: amount.toFixed(4), usdValue: usd.toFixed(4), committedAt: now,
+      })
+      did.push(label)
     }
-    if (!has('Commitment', (a) => a.investor === meridian)) {
-      await createMulti([meridian, registry], tid('Commitment'), { admin: registry, investor: meridian, founder: seller, dealId: DEAL_ID, asset: 'cETH', amount: '200.0000', usdValue: usdOf('cETH', 200).toFixed(4), committedAt: now })
-      did.push('Commitment:Meridian')
-    }
+    await seedCommit(boranic, 'cBTC', 1_500_000, 'Commitment:Boranic')   // $1.5M in Bitcoin
+    await seedCommit(meridian, 'cETH', 800_000, 'Commitment:Meridian')   // $0.8M in Ether → $2.3M/$2.5M = 92%
     // DvP equity leg (founder). The USD capital leg is minted from commitments at settle time.
     const operator = await ensureParty('AtriumApp')
     const regAcs = await acsOf(registry)
