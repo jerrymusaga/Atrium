@@ -133,17 +133,20 @@ export default function App() {
   // chosen asset, the investor signs a real CIP-56 transfer for the payment leg. Otherwise the
   // commitment is still recorded on-ledger by the executor — so a visitor without a wallet (or with an
   // unfunded one) is never blocked from driving the deal to close.
-  const walletPays = LIVE && WALLET
-    && wallet.status === 'connected'
-    && !!walletBalance
-    && Number(commitAmt) > 0
-    && Number(commitAmt) <= walletAvail
-  // Why the wallet ISN'T paying, for the note under the commit box (null = it is, or wallet is off).
-  const walletIdle: string | null = !(LIVE && WALLET) ? null
+  // One state for the wallet leg, so the note can't contradict what the commit will actually do.
+  //   'off'          — wallet flow disabled, or not live
+  //   'connect'      — no wallet connected (the executor records the commitment instead)
+  //   'no-asset'     — connected, but holds none of the selected asset
+  //   'insufficient' — holds some, but the typed amount exceeds it
+  //   'ready'        — will sign a real CIP-56 transfer for this leg (amount may not be typed yet)
+  const walletLeg: 'off' | 'connect' | 'no-asset' | 'insufficient' | 'ready' =
+    !(LIVE && WALLET) ? 'off'
     : wallet.status !== 'connected' ? 'connect'
     : !walletBalance ? 'no-asset'
     : Number(commitAmt) > walletAvail ? 'insufficient'
-    : null
+    : 'ready'
+  // Only actually pay once a valid amount is typed — but 'ready' still reads as ready before that.
+  const walletPays = walletLeg === 'ready' && Number(commitAmt) > 0
 
   const viewCache = useRef<Record<string, DealView>>({})
 
@@ -949,22 +952,23 @@ export default function App() {
                     {view.ratesSource === 'live' && <> · <span className="rate-live">● live spot</span></>}
                   </p>
                 )}
-                {WALLET && (walletPays ? (
+                {walletLeg === 'ready' && (
                   <p className="panel-note commit-wallet">
                     <span className="wallet-dot" /> Paying from your Loop wallet <span className="mono">{walletShort}</span>
                     {' '}· {commitAsset} on hand: <span className="mono">{walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>
                     {' '}— you’ll sign a <strong>real CIP-56 transfer</strong> for this leg.
                   </p>
-                ) : (
+                )}
+                {(walletLeg === 'connect' || walletLeg === 'no-asset' || walletLeg === 'insufficient') && (
                   <p className="panel-note commit-wallet-idle">
-                    {walletIdle === 'connect'
+                    {walletLeg === 'connect'
                       ? <>Optional: <strong>connect your Loop wallet</strong> (left) to pay this leg yourself as a real on-chain transfer.</>
-                      : walletIdle === 'no-asset'
+                      : walletLeg === 'no-asset'
                         ? <>Your wallet holds no <strong>{commitAsset}</strong> — pick an asset you hold to pay it yourself.</>
-                        : <>Not enough <strong>{commitAsset}</strong> in your wallet to pay this leg yourself.</>}
+                        : <>That’s more <strong>{commitAsset}</strong> than your wallet holds ({walletAvail.toLocaleString(undefined, { maximumFractionDigits: 6 })}) — lower the amount to pay it yourself.</>}
                     {' '}The commitment is still recorded on-ledger either way.
                   </p>
-                ))}
+                )}
                 <p className="panel-note">
                   A <strong>{fmtUsd(view?.deal?.raiseTarget ?? 0)}</strong> round for the {(view?.deal?.quantity ?? 120000).toLocaleString()}-share
                   stake. Commit in <strong>USDCx, cBTC, or cETH</strong> — valued in USD at the {view?.ratesSource === 'live' ? <><strong>live BTC/ETH spot</strong> (cBTC is 1:1 BTC-backed, cETH is 1:1 wrapped ETH)</> : <>oracle</>}; your equity is allocated pro-rata to that value at close. Rivals can’t see your commitment.
