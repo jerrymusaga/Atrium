@@ -138,18 +138,19 @@ async function ensurePkg(): Promise<void> {
 const PARTY_NAMESPACE = process.env.PARTY_NAMESPACE ?? ''
 const partyCache = new Map<string, string>()
 
+// Resolve a logical persona (e.g. "Prometheus") to its real party id.
+//
+// This delegates to ensureParty on a cold cache, which ALSO (re)grants the executor CanActAs.
+// It used to only look the party up — never granting — so once a process restart wiped the
+// in-memory cache, the next write resolved a party the executor held no rights for and the
+// ledger rejected it with 403 PERMISSION_DENIED ("a security-sensitive error"). The seed
+// happened to work because it uses ensureParty and warmed the cache in the same process; every
+// write after a redeploy did not. ensureParty is idempotent and caches, so this costs at most
+// one extra resolve+grant per party per process.
 async function partyId(logical: string): Promise<string> {
   const cached = partyCache.get(logical)
   if (cached) return cached
-  if (PARTY_NAMESPACE) {
-    const id = `${hint(logical)}::${PARTY_NAMESPACE}`
-    partyCache.set(logical, id)
-    return id
-  }
-  const hit = (await listParties()).find((p) => matchesLogical(p, logical))
-  if (!hit) throw new Error(`no party for "${logical}" (hint "${hint(logical)}") — seed/onboard it first`)
-  partyCache.set(logical, hit)
-  return hit
+  return ensureParty(logical)
 }
 
 async function ensureParty(logical: string): Promise<string> {
@@ -1205,6 +1206,8 @@ app.get('/health', async (_req, res) => {
       ok: true,
       ledgerApi: process.env.LEDGER_API_URL ?? 'http://localhost:7575',
       userId: USER_ID, partyPrefix: PARTY_PREFIX || '(none)', grantActAs: GRANT_ACT_AS, pkg: PKG ?? '(unresolved)',
+      partyNamespace: PARTY_NAMESPACE || '(none — parties resolved by scanning listParties)',
+      ratesSource, ratesAt, rates: RATES,
       parties: parties.length,
       remoteIdentity: REMOTE ? { label: REMOTE.label, validator: REMOTE.conn.baseUrl } : null,
     })
