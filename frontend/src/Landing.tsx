@@ -147,8 +147,8 @@ export function Landing({ onEnter, live }: { onEnter: () => void; live: boolean 
         </div>
         <div className="swap">
           <div className="swap-side">
-            <div className="swap-chip cash">$4,200,000<small>USD cash</small></div>
-            <div className="swap-who">Buyer</div>
+            <div className="swap-chip cash">$2,500,000<small>capital</small></div>
+            <div className="swap-who">Investors</div>
           </div>
           <div className="swap-link" aria-hidden>
             <svg viewBox="0 0 200 40" preserveAspectRatio="none">

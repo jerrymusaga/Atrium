@@ -1166,8 +1166,11 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
       })
       did.push(label)
     }
+    // $2.5M Series A seeded to 99.9% ($2.497M) so the final ~$3K closes with a real wallet-signed
+    // cETH commitment of ~2 cETH at live ETH spot — small enough to record many takes cheaply,
+    // while the raise size stays coherent with the seeded financials ($41.8M revenue company).
     await seedCommit(boranic, 'cBTC', 1_500_000, 'Commitment:Boranic')   // $1.5M in Bitcoin
-    await seedCommit(meridian, 'cETH', 800_000, 'Commitment:Meridian')   // $0.8M in Ether → $2.3M/$2.5M = 92%
+    await seedCommit(meridian, 'cETH', 997_000, 'Commitment:Meridian')   // $0.997M in Ether → $2.497M/$2.5M = 99.9%
     // DvP equity leg (founder). The USD capital leg is minted from commitments at settle time.
     const operator = await ensureParty('AtriumApp')
     const regAcs = await acsOf(registry)
