@@ -378,7 +378,7 @@ export default function App() {
       await client.loadDemo()
       await refreshViewers()
       await load(true)
-      setMsg('Demo reset — the round is back to its starting state: 92% raised, approvals pending, unsettled.')
+      setMsg('Demo reset — back to the starting state: the round is nearly funded (the final tranche is uncommitted), approvals pending, unsettled.')
     } catch (e) { setMsg((e as Error).message) }
   }
 
@@ -1358,7 +1358,7 @@ export default function App() {
               <h3>{LIVE ? 'Reset the demo?' : 'Start a new deal?'}</h3>
               <p>
                 {LIVE
-                  ? 'This restores the round to its starting state — 92% raised, approvals pending, unsettled — so you can walk the whole flow again from the top.'
+                  ? 'This restores the round to its starting state — nearly funded, with the final tranche and all approvals pending, unsettled — so you can walk the whole flow again from the top.'
                   : 'This clears the current round so you can set one up from scratch — tiers, raise target, stake, and investors.'}
               </p>
               <div className="confirm-actions">

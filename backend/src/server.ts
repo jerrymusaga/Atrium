@@ -274,7 +274,7 @@ app.get('/deals/:dealId/view', async (req, res) => {
       // USD-denominated: sum the per-commitment usdValue so mixed CIP-56 assets aggregate cleanly.
       const usdVal = (c: any) => num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount)))
       const totalCommitted = commitments.reduce((sum, c) => sum + usdVal(c), 0)
-      const percentFunded = raiseTarget > 0 ? Math.min(100, Math.round((totalCommitted / raiseTarget) * 100)) : 0
+      const percentFunded = raiseTarget > 0 ? (totalCommitted >= raiseTarget ? 100 : Math.min(99, Math.floor((totalCommitted / raiseTarget) * 100))) : 0
       const approvalMap = Object.fromEntries(approvals.map((c) => [c.createArgument.role, c]))
       const conditionsList = [
         { key: 'FUNDED',      label: `Raise target ($${Math.round(raiseTarget).toLocaleString()})`, done: totalCommitted >= raiseTarget, detail: `$${Math.round(totalCommitted).toLocaleString()} / $${Math.round(raiseTarget).toLocaleString()}` },
@@ -676,7 +676,7 @@ app.get('/deals/:dealId/conditions', async (req, res) => {
     const commitments = sellerAcs.filter((c) => entityOf(c.templateId) === 'Commitment')
     const approvals = sellerAcs.filter((c) => entityOf(c.templateId) === 'Approval')
     const totalCommitted = commitments.reduce((sum, c) => sum + num(c.createArgument.usdValue ?? usdOf(c.createArgument.asset ?? 'cBTC', num(c.createArgument.amount))), 0)
-    const percentFunded = raiseTarget > 0 ? Math.min(100, Math.round((totalCommitted / raiseTarget) * 100)) : 0
+    const percentFunded = raiseTarget > 0 ? (totalCommitted >= raiseTarget ? 100 : Math.min(99, Math.floor((totalCommitted / raiseTarget) * 100))) : 0
     const approvalMap = Object.fromEntries(approvals.map((c) => [c.createArgument.role, c]))
     const conditionsList = [
       { key: 'FUNDED',     label: `Raise target ($${Math.round(raiseTarget).toLocaleString()})`, done: totalCommitted >= raiseTarget, detail: `$${Math.round(totalCommitted).toLocaleString()} / $${Math.round(raiseTarget).toLocaleString()}` },
