@@ -1132,8 +1132,8 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
     if (!gA) { gA = await create(seller, tid('AccessGrant'), { seller, buyer: boranic, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Boranic') }
     let gB = grantFor(meridian)
     if (!gB) { gB = await create(seller, tid('AccessGrant'), { seller, buyer: meridian, dealId: DEAL_ID, maxTier: '2', grantedAt: now }); did.push('Grant:Meridian') }
-    let gC = grantFor(prometheus)
-    if (!gC) { gC = await create(seller, tid('AccessGrant'), { seller, buyer: prometheus, dealId: DEAL_ID, maxTier: '1', grantedAt: now }); did.push('Grant:Prometheus') }
+    // Prometheus is intentionally NOT seeded — the founder invites them live in the demo (which
+    // issues the AccessGrant + KYC on-ledger), then they commit real cETH from their own wallet.
 
     if (!has('AccessEvent', (a) => a.buyer === boranic)) {
       await exercise(boranic, gA.templateId, gA.contractId, 'RecordAccess', { docId: 'teaser' })
@@ -1144,16 +1144,10 @@ app.post('/deals/:dealId/seed', async (_req, res) => {
       await exercise(meridian, gB.templateId, gB.contractId, 'RecordAccess', { docId: 'financials' })
       did.push('AccessEvent:Meridian')
     }
-    if (!has('AccessEvent', (a) => a.buyer === prometheus)) {
-      await exercise(prometheus, gC.templateId, gC.contractId, 'RecordAccess', { docId: 'teaser' })
-      did.push('AccessEvent:Prometheus')
-    }
     if (!has('KYCAttestation', (a) => a.subject === boranic))   { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: boranic,   relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Boranic') }
     if (!has('KYCAttestation', (a) => a.subject === meridian))  { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: meridian,  relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'US', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Meridian') }
-    if (!has('KYCAttestation', (a) => a.subject === prometheus)) { await create(kycp, tid('KYCAttestation'), { kycProvider: kycp, subject: prometheus, relyingParty: seller, level: 'KYB-INSTITUTIONAL', jurisdiction: 'SG', issuedAt: now, expiresAt: oneYear }); did.push('KYC:Prometheus') }
     if (!has('Offer', (a) => a.buyer === meridian))  { await create(meridian,  tid('Offer'), { buyer: meridian,  seller, dealId: DEAL_ID, pricePerUnit: '0.2083', quantity: '120000.0', submittedAt: now }); did.push('Offer:Meridian') }
     if (!has('Offer', (a) => a.buyer === boranic))   { await create(boranic,   tid('Offer'), { buyer: boranic,   seller, dealId: DEAL_ID, pricePerUnit: '0.1850', quantity: '120000.0', submittedAt: now }); did.push('Offer:Boranic') }
-    if (!has('Offer', (a) => a.buyer === prometheus)) { await create(prometheus, tid('Offer'), { buyer: prometheus, seller, dealId: DEAL_ID, pricePerUnit: '0.1750', quantity: '120000.0', submittedAt: now }); did.push('Offer:Prometheus') }
 
     // Multi-asset commitments: Boranic 15 cBTC ($1.5M) + Meridian 200 cETH ($0.8M) = $2.3M/$2.5M
     // seeded; Prometheus tops up in USDCx via the UI. usdValue is oracle-priced at commit time.
