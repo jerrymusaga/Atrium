@@ -94,6 +94,7 @@ export default function App() {
   const [rollback, setRollback] = useState<string | null>(null)
   const [attestation, setAttestation] = useState<CloseAttestation | null>(null)
   const [inviteName, setInviteName] = useState('')
+  const [inviting, setInviting] = useState(false)
   const [inviteTier, setInviteTier] = useState(1)
   const [commitAmt, setCommitAmt] = useState('')
   const [commitAsset, setCommitAsset] = useState<Asset>('USDCx')
@@ -226,12 +227,16 @@ export default function App() {
   }
 
   async function invite() {
+    const name = inviteName.trim()
+    if (!name || inviting) return
+    setInviting(true)
+    setMsg(`Inviting ${name} — allocating their Canton party, issuing the on-ledger grant + KYC…`)
     try {
-      await client.inviteBuyer(viewer, inviteName, inviteTier)
+      await client.inviteBuyer(viewer, name, inviteTier)
       setInviteName('')
       await refreshViewers()
-      setMsg(`Invited ${inviteName} at tier ${inviteTier} — switch the lens to see their view.`)
-    } catch (e) { setMsg((e as Error).message) }
+      setMsg(`Invited ${name} at ${tierName(inviteTier)} — switch the lens to see their view.`)
+    } catch (e) { setMsg((e as Error).message) } finally { setInviting(false) }
   }
 
   function onPickFile(f?: File) {
@@ -511,8 +516,10 @@ export default function App() {
                 ))}
               </select>
             </div>
-            <button className="btn wide" disabled={!inviteName.trim()} onClick={invite}>
-              Grant up to “{tierName(inviteTier)}”
+            <button className="btn wide" disabled={!inviteName.trim() || inviting} onClick={invite}>
+              {inviting
+                ? <><span className="spinner" aria-hidden /> Granting on-ledger…</>
+                : <>Grant up to “{tierName(inviteTier)}”</>}
             </button>
 
             {WALLET_INVITE && accessReqs.length > 0 && (
