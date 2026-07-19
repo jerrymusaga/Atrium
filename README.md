@@ -7,7 +7,9 @@
 **A private capital-markets operating system on Canton Network** — the same permissioned deal you run
 diligence on is the one that atomically settles capital for tokenized ownership, in a single transaction.
 
-[**▶ Live app**](https://atrium-omega.vercel.app) · [**Backend health**](https://atrium-production-4de8.up.railway.app/health) · Built for the Encode Club **Build on Canton** hackathon
+[**▶ Live app**](https://atrium-omega.vercel.app) · [**Backend `/health`**](https://atrium-production-4de8.up.railway.app/health) · [**Ledger feed**](https://atrium-production-4de8.up.railway.app/activity)
+
+`● Live on Canton devnet` · `Daml 3.4.11` · `CIP-56` · `7 Daml proofs ✓` · `real wallet-signed cETH settlement`
 
 </div>
 
@@ -81,7 +83,8 @@ This is deployed and running on a real Canton validator — not LocalNet, not a 
 | **On-ledger invitation** | Inviting an investor allocates a **real Canton party**, issues an `AccessGrant` at a chosen tier, and attests their KYC. |
 | **Immutable audit trail** | Every document open exercises `RecordAccess`, writing an `AccessEvent` — who saw what, when. Not an editable log. |
 | **Tier-bounded AI copilot** | A diligence assistant that receives **only** the documents the asking party's on-ledger grant authorizes. It cannot answer about a tier you aren't cleared for. |
-| **Multi-asset raise** | Investors commit in USDCx / cBTC / cETH, oracle-priced to a single USD target; equity is allocated **pro-rata** by USD value. |
+| **Multi-asset raise, live-priced** | Investors commit in USDCx / cBTC / cETH, valued at the **live BTC/ETH spot** to a single USD target; equity is allocated **pro-rata** by USD value. |
+| **Real wallet-signed payment** | An investor funds a tranche with a **real CIP-56 cETH transfer signed in their own Loop wallet** — it settles on Canton devnet and anchors the on-ledger commitment. |
 | **Governance gate** | Board / Legal / Compliance approvals, each anchored on-ledger with a signed-resolution hash. |
 | **Atomic DvP close** | Capital and tokenized equity swap in one transaction — or the whole thing reverts with nothing moved. |
 | **Provable integrity** | Recompute any document's hash and prove it still matches the immutable on-ledger anchor. |
@@ -89,32 +92,39 @@ This is deployed and running on a real Canton validator — not LocalNet, not a 
 
 ## What's real, and what's modeled
 
-We're precise about this on purpose.
+We draw this line precisely on purpose — it's the difference between a demo and a mockup.
 
 **Genuinely real, on Canton devnet:**
 - Every contract — `Deal`, `Document`, `AccessGrant`, `AccessEvent`, `Commitment`, `Approval`,
   `KYCAttestation`, `Holding`, `ShareCertificate` — is a real contract on the validator, with real `updateId`s.
 - **Selective disclosure** is enforced by Canton's per-party projection, not by application code.
 - **Atomicity** is real Canton behaviour: the close commits fully or reverts entirely.
+- **The price oracle is live.** cBTC is 1:1 BTC-backed and cETH is 1:1 wrapped ETH, so commitments are
+  valued at the **live BTC/ETH spot price** (polled continuously, with a fallback if the feed is
+  unreachable); USDCx is par ($1). The valuation is not an approximation — spot *is* their price.
+- **A real wallet-signed payment leg.** An investor connects their own **Loop wallet** and funds a tranche
+  with a **real CIP-56 cETH transfer they sign themselves**. It settles cross-participant — the token
+  transfer uses the network-vetted Splice packages — and the on-ledger `Commitment` is anchored to that
+  transaction id.
 
-**Modeled (not real assets):**
-- **cBTC / cETH / USDCx are asset labels with a fixed demo oracle** (`USDCx: 1, cBTC: 100000, cETH: 4000`).
-  They are **not** the real BitSafe / OnRails / Circle token contracts.
-- The settlement leg uses Atrium's own `Holding` templates, which **mirror the shape of** the Splice Token
-  Standard (CIP-56) so the model is self-contained — deliberately shaped for a drop-in swap to the real
-  token-standard packages.
+**Modeled — deliberately, and drop-in-ready:**
+- The **settlement templates** (`Holding`, `AllocationFactory`, `Allocation`) **mirror the shape of** the
+  Splice Token Standard (CIP-56) so the model is self-contained. They are shaped for a direct swap to the
+  real registry instruments, but are not yet the real BitSafe / OnRails / Circle contracts.
+- The **seeded** cBTC/cETH commitments are executor-recorded at live-spot value (modeled amounts); only the
+  investor's own cETH commit is a real wallet transfer. The demo cETH is **devnet** — a real transfer, but
+  notional value.
 
-**Built but not enabled:**
-- **Loop wallet integration** (`@fivenorth/loop-sdk`) — real Canton sign-in, on-chain holdings, and a
-  wallet-signed CIP-56 payment leg. Ships behind `VITE_WALLET=1`, **off by default** so the demo is
-  drivable by anyone without a Canton wallet. (Granting a *cross-participant* wallet party on-ledger
-  additionally requires the Atrium package to be vetted on that wallet's participant — an infra step.)
-
-**Not built:**
-- No authentication or multi-tenancy — the demo is single-tenant with a fixed founder party, and the lens
-  switcher deliberately lets you inhabit every party so all sides of a private deal are visible.
-- M&A and secondary sales are **not shipped** — the primitives generalise to them, but only the primary
-  fundraise is complete end-to-end.
+**Known boundaries (not built):**
+- **Cross-participant on-ledger grants.** Issuing an Atrium `AccessGrant` to a wallet party hosted on
+  *another* participant needs the Atrium package vetted on that participant, or the ledger returns
+  `NO_SYNCHRONIZER_FOR_SUBMISSION`. The wallet's *token transfer* works cross-participant (Splice is
+  network-vetted); naming that party in a *custom* Atrium contract does not, yet.
+- **No authentication or multi-tenancy.** The hosted demo is single-tenant with a fixed founder party, and
+  the lens switcher deliberately lets you inhabit every party so all sides of a private deal are visible in
+  one walkthrough.
+- **M&A and secondary sales** — the primitives generalise to them, but only the primary fundraise is
+  complete end-to-end.
 
 ## Ledger-verified proofs
 
@@ -148,13 +158,32 @@ The guarantees are **proven in Daml, not asserted** — 7 scripts, all green. Ru
 
 **Two-layer by design:** Canton holds rights, disclosure and economics; the app holds everything else.
 The executor drives the ledger over the JSON Ledger API v2 (OIDC client-credentials), serves each party
-only their projection, and runs the atomic close.
+only their projection, and runs the atomic close. The **payment leg is separable**: an investor's Loop
+wallet moves a real CIP-56 token straight to the deal escrow (never through the executor), and the app
+anchors the commitment to that transaction id — so real, self-custodial money settles alongside the
+executor-driven app contracts.
+
+### Notable Canton engineering
+- **Deployed to shared devnet infrastructure**, not LocalNet — via Seaport's GitHub build (SDK pinned to
+  **3.4.11**), navigating Daml's **Smart Contract Upgrade** rules for the package lineage (new fields must
+  be trailing `Optional`s; SCU-valid `0.7.0 → 0.9.0`).
+- **Cross-participant package vetting.** A wallet party lives on a different participant that hasn't vetted
+  the Atrium package, so a custom contract naming it is refused — but a **Splice token transfer settles
+  cross-participant** because Splice is vetted network-wide. That distinction is what makes the real
+  wallet-signed payment work while the on-ledger *grant* to a wallet party remains a vetting-gated step.
+- **Live price oracle** with continuous polling and a last-good fallback, so a dead feed can never block a
+  commit; the raise is USD-denominated and mixed CIP-56 assets aggregate cleanly against one target.
+- **Party / `CanActAs` management** on a shared ~10k-party validator: the executor resolves personas and
+  (re)grants act-as on demand, resilient to process restarts.
+- **Provable off-chain integrity:** documents are encrypted in an off-chain vault; the content hash is
+  anchored on-ledger, so re-hashing the vault proves byte-for-byte that nothing was altered.
 
 ## Tech stack
 
 - **Ledger** — Daml (SDK 3.4.11) on **Canton Network**, deployed to the FiveNorth Seaport devnet validator via the JSON Ledger API v2
-- **Token standard** — Splice / **CIP-56**-shaped settlement templates
-- **Wallet** — **Loop** (`@fivenorth/loop-sdk`, CIP-0103) — sign-in, holdings, wallet-signed transfers *(behind a flag)*
+- **Token standard** — Splice / **CIP-56** — real cETH transfers via the token standard; CIP-56-shaped settlement templates
+- **Wallet** — **Loop** (`@fivenorth/loop-sdk`, CIP-0103) — real sign-in, live on-chain holdings, and a **real wallet-signed CIP-56 cETH payment leg**
+- **Oracle** — live BTC/ETH spot (continuous poll + fallback); USDCx at par
 - **Backend** — Node.js · TypeScript · Express · OIDC · encrypted off-chain document vault · **Venice AI** copilot · deployed on **Railway**
 - **Frontend** — React · TypeScript · Vite · deployed on **Vercel**
 
@@ -174,11 +203,13 @@ make frontend-live       # UI with VITE_LIVE=1
 
 **The proofs:**
 ```bash
-make ledger-test         # privacy · atomic DvP · atomicity · conditional close
+make ledger-test         # 7 scripts: privacy · KYC gate · conditional close · atomic DvP ·
+                         #            atomicity · distribution · share transfer
 ```
 
 **Environment** (`backend/.env`): `LEDGER_API_URL`, OIDC client credentials, `ATRIUM_PKG`, `VENICE_API_KEY`.
-Frontend: `VITE_LIVE=1`, `VITE_API_URL`, optional `VITE_WALLET=1`.
+Frontend: `VITE_LIVE=1`, `VITE_API_URL`, `VITE_WALLET=1` (enabled in the hosted demo — the wallet is
+optional; commits work with or without it).
 
 ## Project structure
 
@@ -186,19 +217,22 @@ Frontend: `VITE_LIVE=1`, `VITE_API_URL`, optional `VITE_WALLET=1`.
 atrium/
   ledger/     Daml package — DealRoom (deal, documents, grants, audit, commitments, approvals,
               the conditional close gate) + Dvp (atomic settlement, CIP-56 shaped) + Equity (cap table),
-              with the four proof scripts
+              with seven proof scripts
   backend/    Executor — party-scoped views, encrypted document vault, the atomic close, the
-              tier-bounded AI copilot, over the Canton JSON Ledger API v2
+              tier-bounded AI copilot, the live price oracle, over the Canton JSON Ledger API v2
   frontend/   React console — viewer lens, tier-redacted documents, audit trail, live ledger-activity
-              feed, the close and the stress-test, Loop wallet integration (flagged off)
+              feed, the close and the stress-test, and Loop wallet integration (real sign-in, live
+              holdings, wallet-signed cETH payment)
 ```
 
 ## Roadmap
 
-1. **Real CIP-56 assets** — swap the modeled cBTC / cETH / USDCx for the real BitSafe, OnRails and Circle
-   token contracts already live on Canton. The settlement templates are already shaped for it.
-2. **Wallet-native investing** — enable Loop sign-in and the wallet-signed payment leg (built, flagged
-   off); requires the package vetted on the wallet's participant for cross-participant grants.
+1. **Real CIP-56 assets end-to-end** — the investor payment leg is already a real cETH transfer; extend the
+   same to the *settlement* leg by swapping the modeled `Holding`/`Allocation` templates for the real
+   BitSafe, OnRails and Circle registry contracts. The templates are already shaped for it.
+2. **Cross-participant wallet-native investing** — the wallet payment and sign-in are live; issuing the
+   on-ledger *grant/commitment* to a wallet party on another participant needs the Atrium package vetted
+   there (the one remaining `NO_SYNCHRONIZER` boundary).
 3. **More instruments** — secondaries and M&A on the same primitives (tier-gated room, on-ledger audit,
    governance gate, atomic close).
 4. **Multi-tenancy + identity** — the founder becomes whoever connects their Canton wallet; many
