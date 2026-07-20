@@ -57,7 +57,7 @@ This is deployed and running on a real Canton validator — not LocalNet, not a 
 | **Backend / executor** | https://atrium-production-4de8.up.railway.app/health → `{ ok: true, … }` |
 | **Validator** | FiveNorth **Seaport** devnet, Encode organisation — `ledger-api.validator.devnet.sandbox.fivenorth.io` |
 | **Daml package** | `atrium-cm` 0.9.0 — `e20be214a2147aa9509f662f18da7e159b5ab9bfdaaca08215d3269f13e68db5` |
-| **Demo video** | _(add link)_ |
+| **Demo video** | https://youtu.be/DdpgWvArhMU?si=GLwA-hgSF5Rdkq6d |
 
 ## Verify this yourself
 
